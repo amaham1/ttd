@@ -1,0 +1,2 @@
+"""Trading core app."""
+

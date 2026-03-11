@@ -1,0 +1,13 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY pyproject.toml README.md ./
+COPY apps ./apps
+COPY libs ./libs
+COPY alembic.ini ./
+COPY alembic ./alembic
+
+RUN pip install --no-cache-dir -e .
+
+CMD ["python", "-m", "uvicorn", "apps.ops_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
