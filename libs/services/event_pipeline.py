@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from libs.contracts.factory import build_envelope
-from libs.contracts.messages import FillEvent, OrderAckEvent
+from libs.contracts.messages import FillEvent, MarketTick, OrderAckEvent, QuoteL1
 from libs.domain.enums import MessageType
 
 
@@ -45,6 +45,41 @@ class EventPipelineService:
             instrument_scope=event.instrument_id,
         )
         subject = "evt.execution.fill"
+        if self.event_bus is not None:
+            await self.event_bus.publish_json(subject, envelope.model_dump(mode="json"))
+        return PublishedEnvelope(subject=subject, envelope=envelope.model_dump(mode="json"))
+
+    async def publish_market_tick(self, event: MarketTick) -> PublishedEnvelope:
+        envelope = build_envelope(
+            message_type=MessageType.EVENT,
+            message_name="MarketTickReceived",
+            producer="broker-gateway",
+            payload=event.model_dump(mode="json"),
+            idempotency_key=f"{event.instrument_id}:{event.exchange_ts_utc.isoformat()}:{event.last_price}:{event.last_qty}",
+            correlation_id=None,
+            account_scope=None,
+            instrument_scope=event.instrument_id,
+        )
+        subject = "evt.market.tick"
+        if self.event_bus is not None:
+            await self.event_bus.publish_json(subject, envelope.model_dump(mode="json"))
+        return PublishedEnvelope(subject=subject, envelope=envelope.model_dump(mode="json"))
+
+    async def publish_quote_l1(self, event: QuoteL1) -> PublishedEnvelope:
+        envelope = build_envelope(
+            message_type=MessageType.EVENT,
+            message_name="QuoteL1Received",
+            producer="broker-gateway",
+            payload=event.model_dump(mode="json"),
+            idempotency_key=(
+                f"{event.instrument_id}:{event.exchange_ts_utc.isoformat()}:"
+                f"{event.best_bid_px}:{event.best_ask_px}:{event.best_bid_qty}:{event.best_ask_qty}"
+            ),
+            correlation_id=None,
+            account_scope=None,
+            instrument_scope=event.instrument_id,
+        )
+        subject = "evt.market.quote_l1"
         if self.event_bus is not None:
             await self.event_bus.publish_json(subject, envelope.model_dump(mode="json"))
         return PublishedEnvelope(subject=subject, envelope=envelope.model_dump(mode="json"))

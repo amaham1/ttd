@@ -8,11 +8,14 @@ services:
     env_file:
       - .env
     environment:
+      BROKER_GATEWAY_URL: http://broker-gateway:8001
+      SHADOW_LIVE_URL: http://shadow-live:8005
       MARIADB_HOST: mariadb
       MARIADB_PORT: 3306
       REDIS_URL: redis://redis:6379/0
       NATS_URL: nats://nats:4222
       MINIO_ENDPOINT: minio:9000
+      CLICKHOUSE_HOST: clickhouse
     ports:
       - "8000:8000"
     depends_on:
@@ -20,6 +23,7 @@ services:
       - redis
       - nats
       - minio
+      - clickhouse
 
   broker-gateway:
     build:
@@ -35,6 +39,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       NATS_URL: nats://nats:4222
       MINIO_ENDPOINT: minio:9000
+      CLICKHOUSE_HOST: clickhouse
     ports:
       - "8001:8001"
     depends_on:
@@ -42,6 +47,7 @@ services:
       - redis
       - nats
       - minio
+      - clickhouse
 
   market-intel:
     build:
@@ -57,6 +63,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       NATS_URL: nats://nats:4222
       MINIO_ENDPOINT: minio:9000
+      CLICKHOUSE_HOST: clickhouse
     ports:
       - "8003:8003"
     depends_on:
@@ -64,6 +71,7 @@ services:
       - redis
       - nats
       - minio
+      - clickhouse
 
   trading-core:
     build:
@@ -79,6 +87,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       NATS_URL: nats://nats:4222
       MINIO_ENDPOINT: minio:9000
+      CLICKHOUSE_HOST: clickhouse
     ports:
       - "8002:8002"
     depends_on:
@@ -86,6 +95,7 @@ services:
       - redis
       - nats
       - minio
+      - clickhouse
 
   replay-runner:
     build:
@@ -101,6 +111,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       NATS_URL: nats://nats:4222
       MINIO_ENDPOINT: minio:9000
+      CLICKHOUSE_HOST: clickhouse
     ports:
       - "8004:8004"
     depends_on:
@@ -108,6 +119,7 @@ services:
       - redis
       - nats
       - minio
+      - clickhouse
 
   shadow-live:
     build:
@@ -119,28 +131,143 @@ services:
       - .env
     environment:
       BROKER_GATEWAY_URL: http://broker-gateway:8001
+      OPS_API_URL: http://ops-api:8000
+      SELECTOR_ENGINE_URL: http://selector-engine:8008
+      PORTFOLIO_ENGINE_URL: http://portfolio-engine:8009
+      MARIADB_HOST: mariadb
+      MARIADB_PORT: 3306
+      REDIS_URL: redis://redis:6379/0
+      NATS_URL: nats://nats:4222
+      MINIO_ENDPOINT: minio:9000
+      CLICKHOUSE_HOST: clickhouse
+    ports:
+      - "8005:8005"
+    depends_on:
+      - broker-gateway
+      - ops-api
+      - selector-engine
+      - portfolio-engine
+      - mariadb
+      - redis
+      - nats
+      - minio
+      - clickhouse
+
+  data-ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    command: ["python", "-m", "uvicorn", "apps.data_ingest.main:app", "--host", "0.0.0.0", "--port", "8006"]
+    env_file:
+      - .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
       MARIADB_HOST: mariadb
       MARIADB_PORT: 3306
       REDIS_URL: redis://redis:6379/0
       NATS_URL: nats://nats:4222
       MINIO_ENDPOINT: minio:9000
     ports:
-      - "8005:8005"
+      - "8006:8006"
     depends_on:
       - mariadb
       - redis
       - nats
       - minio
+      - clickhouse
+
+  feature-pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    command: ["python", "-m", "uvicorn", "apps.feature_pipeline.main:app", "--host", "0.0.0.0", "--port", "8007"]
+    env_file:
+      - .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      MARIADB_HOST: mariadb
+      MARIADB_PORT: 3306
+      REDIS_URL: redis://redis:6379/0
+      NATS_URL: nats://nats:4222
+      MINIO_ENDPOINT: minio:9000
+    ports:
+      - "8007:8007"
+    depends_on:
+      - market-intel
+      - clickhouse
+
+  selector-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    command: ["python", "-m", "uvicorn", "apps.selector_engine.main:app", "--host", "0.0.0.0", "--port", "8008"]
+    env_file:
+      - .env
+    environment:
+      BROKER_GATEWAY_URL: http://broker-gateway:8001
+      CLICKHOUSE_HOST: clickhouse
+      MARKET_INTEL_URL: http://market-intel:8003
+      MARIADB_HOST: mariadb
+      MARIADB_PORT: 3306
+      REDIS_URL: redis://redis:6379/0
+      NATS_URL: nats://nats:4222
+      MINIO_ENDPOINT: minio:9000
+    ports:
+      - "8008:8008"
+    depends_on:
+      - market-intel
+      - broker-gateway
+      - feature-pipeline
+      - clickhouse
+
+  portfolio-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    command: ["python", "-m", "uvicorn", "apps.portfolio_engine.main:app", "--host", "0.0.0.0", "--port", "8009"]
+    env_file:
+      - .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      SELECTOR_ENGINE_URL: http://selector-engine:8008
+      MARIADB_HOST: mariadb
+      MARIADB_PORT: 3306
+      REDIS_URL: redis://redis:6379/0
+      NATS_URL: nats://nats:4222
+      MINIO_ENDPOINT: minio:9000
+    ports:
+      - "8009:8009"
+    depends_on:
+      - selector-engine
+      - clickhouse
 
   ops-web:
     build:
       context: ./ops-web
       dockerfile: Dockerfile
     restart: unless-stopped
+    environment:
+      OPS_API_PROXY_TARGET: http://ops-api:8000
+      BROKER_GATEWAY_PROXY_TARGET: http://broker-gateway:8001
+      TRADING_CORE_PROXY_TARGET: http://trading-core:8002
+      MARKET_INTEL_PROXY_TARGET: http://market-intel:8003
+      REPLAY_RUNNER_PROXY_TARGET: http://replay-runner:8004
+      SHADOW_LIVE_PROXY_TARGET: http://shadow-live:8005
+      DATA_INGEST_PROXY_TARGET: http://data-ingest:8006
     ports:
       - "5173:5173"
     depends_on:
       - ops-api
+      - broker-gateway
+      - trading-core
+      - market-intel
+      - replay-runner
+      - shadow-live
+      - data-ingest
 
   mariadb:
     image: mariadb:11.4
@@ -184,6 +311,19 @@ services:
       - "9001:9001"
     volumes:
       - ./minio-data:/data
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.1
+    restart: unless-stopped
+    ports:
+      - "8123:8123"
+      - "9009:9000"
+    environment:
+      CLICKHOUSE_DB: kis_ai_trading
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+    volumes:
+      - ./clickhouse-data:/var/lib/clickhouse
 
   prometheus:
     image: prom/prometheus:v2.55.0

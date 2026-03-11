@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import date
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -35,6 +36,18 @@ class GenericPayloadRequest(BaseModel):
     payload: dict
 
 
+class ReconciliationRunRequest(BaseModel):
+    trading_date: date | None = None
+
+
+class WebSocketStartRequest(BaseModel):
+    env: Environment | None = None
+    symbols: list[str] | None = None
+    venue: str = "KRX"
+    include_fill_notice: bool = True
+    include_market_status: bool = True
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "broker-gateway"}
@@ -43,6 +56,103 @@ async def health() -> dict[str, str]:
 @app.get("/snapshot")
 async def snapshot():
     return runtime.snapshot()
+
+
+@app.get("/ws/status")
+async def websocket_status():
+    return runtime.ws_snapshot()
+
+
+@app.post("/ws/start")
+async def start_websocket_consumer(request: WebSocketStartRequest):
+    try:
+        return await runtime.start_ws_consumer(
+            symbols=request.symbols,
+            venue=request.venue,
+            env=request.env,
+            include_fill_notice=request.include_fill_notice,
+            include_market_status=request.include_market_status,
+        )
+    except LiveTradingGuardError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/ws/stop")
+async def stop_websocket_consumer():
+    return await runtime.stop_ws_consumer()
+
+
+@app.get("/ws/quotes")
+async def list_ws_quotes(limit: int = 100, symbol: str | None = None):
+    return runtime.list_latest_quotes(limit=limit, symbol=symbol)
+
+
+@app.get("/ws/trades")
+async def list_ws_trades(limit: int = 100, symbol: str | None = None):
+    return runtime.list_latest_trades(limit=limit, symbol=symbol)
+
+
+@app.get("/ws/market-status")
+async def list_ws_market_status(limit: int = 20):
+    return runtime.list_market_status_snapshots(limit=limit)
+
+
+@app.get("/ws/order-notices")
+async def list_ws_order_notices(limit: int = 20):
+    return runtime.recent_order_notices[:limit]
+
+
+@app.get("/market/guard/{symbol}")
+async def market_guard(symbol: str, venue: str = "KRX"):
+    return runtime.live_market_guard(symbol=symbol, venue=venue)
+
+
+@app.get("/oms/orders")
+async def list_oms_orders(limit: int = 100):
+    return runtime.list_order_tickets(limit=limit)
+
+
+@app.get("/oms/orders/{internal_order_id}")
+async def get_oms_order(internal_order_id: str):
+    order = runtime.get_order_ticket(internal_order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="order not found")
+    return order
+
+
+@app.get("/oms/fills")
+async def list_oms_fills(
+    limit: int = 100,
+    internal_order_id: str | None = None,
+    broker_order_no: str | None = None,
+):
+    return runtime.list_execution_fills(
+        limit=limit,
+        internal_order_id=internal_order_id,
+        broker_order_no=broker_order_no,
+    )
+
+
+@app.post("/oms/recover")
+async def recover_oms_state(limit: int = 200):
+    return await runtime.recover_oms_state(limit=limit)
+
+
+@app.get("/reconciliation/breaks")
+async def list_reconciliation_breaks(limit: int = 100, open_only: bool = True):
+    return runtime.list_reconciliation_breaks(limit=limit, open_only=open_only)
+
+
+@app.post("/reconciliation/run")
+async def run_reconciliation(request: ReconciliationRunRequest):
+    return await runtime.run_intraday_reconciliation(trading_date=request.trading_date)
+
+
+@app.post("/maintenance/purge-nonlive-orders")
+async def purge_nonlive_order_artifacts():
+    return runtime.purge_nonlive_order_artifacts()
 
 
 @app.post("/auth/rest")

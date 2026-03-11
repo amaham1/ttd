@@ -142,6 +142,18 @@ class KISBrokerGateway(ABC):
     async def subscribe_market_status(self, symbol: str = "", venue: str = "KRX") -> None:
         raise NotImplementedError
 
+    @abstractmethod
+    async def recv_ws_message(self) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def send_ws_pong(self, payload: str | bytes | None = None) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def close_ws(self) -> None:
+        raise NotImplementedError
+
 
 class KISHttpBrokerGateway(KISBrokerGateway):
     def __init__(
@@ -158,10 +170,15 @@ class KISHttpBrokerGateway(KISBrokerGateway):
         self._subscriptions: list[KISWebSocketSubscription] = []
 
     async def close(self) -> None:
+        await self.close_ws()
+        await self.client.aclose()
+
+    async def close_ws(self) -> None:
         if self._ws_session is not None:
             await self._ws_session.close()
             self._ws_session = None
-        await self.client.aclose()
+        self._ws_crypto = {}
+        self._subscriptions = []
 
     async def issue_rest_token(self, env: Environment) -> KISToken:
         cached = self._token_cache.get(env)
@@ -489,24 +506,35 @@ class KISHttpBrokerGateway(KISBrokerGateway):
             "payload": payload,
         }
 
-    async def subscribe_quote(self, symbol: str, venue: str = "KRX") -> None:
-        env = Environment.VPS
+    async def send_ws_pong(self, payload: str | bytes | None = None) -> None:
+        if self._ws_session is None:
+            raise KISAPIError("websocket session is not connected")
+        pong_payload = payload.encode("utf-8") if isinstance(payload, str) else payload
+        await self._ws_session.pong(pong_payload)
+
+    async def subscribe_quote(self, symbol: str, venue: str = "KRX", env: Environment | None = None) -> None:
+        env = env or (Environment.VPS if self.settings.kis_enable_paper else Environment.PROD)
         tr_id = {"KRX": "H0STASP0", "NXT": "H0NXASP0", "TOTAL": "H0UNASP0"}.get(venue, "H0STASP0")
         await self._ws_subscribe(env, tr_id, symbol)
 
-    async def subscribe_trade(self, symbol: str, venue: str = "KRX") -> None:
-        env = Environment.VPS
+    async def subscribe_trade(self, symbol: str, venue: str = "KRX", env: Environment | None = None) -> None:
+        env = env or (Environment.VPS if self.settings.kis_enable_paper else Environment.PROD)
         tr_id = {"KRX": "H0STCNT0", "NXT": "H0NXCNT0", "TOTAL": "H0UNCNT0"}.get(venue, "H0STCNT0")
         await self._ws_subscribe(env, tr_id, symbol)
 
-    async def subscribe_fill_notice(self, symbol: str = "") -> None:
-        env = Environment.VPS
+    async def subscribe_fill_notice(self, symbol: str = "", env: Environment | None = None) -> None:
+        env = env or (Environment.VPS if self.settings.kis_enable_paper else Environment.PROD)
         tr_id = "H0STCNI9" if env == Environment.VPS else "H0STCNI0"
         tr_key = self.settings.kis_hts_id if not symbol else symbol
         await self._ws_subscribe(env, tr_id, tr_key)
 
-    async def subscribe_market_status(self, symbol: str = "", venue: str = "KRX") -> None:
-        env = Environment.VPS
+    async def subscribe_market_status(
+        self,
+        symbol: str = "",
+        venue: str = "KRX",
+        env: Environment | None = None,
+    ) -> None:
+        env = env or (Environment.VPS if self.settings.kis_enable_paper else Environment.PROD)
         tr_id = {"KRX": "H0STMKO0", "NXT": "H0NXMKO0", "TOTAL": "H0UNMKO0"}.get(venue, "H0STMKO0")
         tr_key = symbol or venue
         await self._ws_subscribe(env, tr_id, tr_key)
@@ -534,14 +562,28 @@ class StubKISBrokerGateway(KISBrokerGateway):
     async def query_daily_ccld(self, payload: dict[str, Any]) -> dict[str, Any]:
         return {"status": "ok", "payload": payload}
 
-    async def subscribe_quote(self, symbol: str, venue: str = "KRX") -> None:
+    async def subscribe_quote(self, symbol: str, venue: str = "KRX", env: Environment | None = None) -> None:
         return None
 
-    async def subscribe_trade(self, symbol: str, venue: str = "KRX") -> None:
+    async def subscribe_trade(self, symbol: str, venue: str = "KRX", env: Environment | None = None) -> None:
         return None
 
-    async def subscribe_fill_notice(self, symbol: str = "") -> None:
+    async def subscribe_fill_notice(self, symbol: str = "", env: Environment | None = None) -> None:
         return None
 
-    async def subscribe_market_status(self, symbol: str = "", venue: str = "KRX") -> None:
+    async def subscribe_market_status(
+        self,
+        symbol: str = "",
+        venue: str = "KRX",
+        env: Environment | None = None,
+    ) -> None:
+        return None
+
+    async def recv_ws_message(self) -> dict[str, Any]:
+        return {"type": "control", "payload": {"tr_id": "PINGPONG", "is_pingpong": True}}
+
+    async def send_ws_pong(self, payload: str | bytes | None = None) -> None:
+        return None
+
+    async def close_ws(self) -> None:
         return None

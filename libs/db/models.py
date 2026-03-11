@@ -172,6 +172,26 @@ class CoreTradeCandidate(Base):
     payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class EvtCandidateDecision(Base):
+    __tablename__ = "evt_candidate_decision"
+
+    candidate_decision_pk: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    decision_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    candidate_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    source_receipt_no: Mapped[str | None] = mapped_column(String(64), index=True)
+    source_report_name: Mapped[str | None] = mapped_column(String(255))
+    source_symbol: Mapped[str | None] = mapped_column(String(32), index=True)
+    matched_positive_rule_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    matched_block_rule_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    candidate_status: Mapped[str] = mapped_column(String(64), index=True)
+    selection_reason: Mapped[str | None] = mapped_column(Text)
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
+    ranking_score: Mapped[float | None] = mapped_column(Numeric(12, 4))
+    ranking_reason: Mapped[str | None] = mapped_column(Text)
+    decision_payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=False), default=utcnow)
+
+
 class CoreRiskGateDecision(Base):
     __tablename__ = "core_risk_gate_decision"
 

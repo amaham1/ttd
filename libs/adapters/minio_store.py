@@ -39,3 +39,14 @@ class MinioObjectStore:
             content_type="application/json",
         )
         return ObjectRef(bucket=bucket, object_name=object_name, size=len(content))
+
+    def put_bytes(self, bucket: str, object_name: str, content: bytes, content_type: str) -> ObjectRef:
+        self.ensure_bucket(bucket)
+        self.client.put_object(
+            bucket_name=bucket,
+            object_name=object_name,
+            data=io.BytesIO(content),
+            length=len(content),
+            content_type=content_type,
+        )
+        return ObjectRef(bucket=bucket, object_name=object_name, size=len(content))

@@ -16,7 +16,11 @@ class ReplayJob:
 
 class ReplayJobService:
     def __init__(self) -> None:
-        self._jobs: dict[str, ReplayJob] = {
+        self._jobs: dict[str, ReplayJob] = self._default_jobs()
+
+    @staticmethod
+    def _default_jobs() -> dict[str, ReplayJob]:
+        return {
             "replay-demo": ReplayJob(
                 replay_job_id="replay-demo",
                 trading_date=date(2026, 3, 10),
@@ -40,6 +44,9 @@ class ReplayJobService:
         )
         self._jobs[replay_job.replay_job_id] = replay_job
         return replay_job
+
+    def reset(self) -> None:
+        self._jobs = self._default_jobs()
 
 
 replay_job_service = ReplayJobService()

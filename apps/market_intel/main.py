@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import date
 
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -46,6 +47,25 @@ async def sample_candidates():
     return market_intel_service.sample_candidates()
 
 
+@app.get("/events/structured")
+async def structured_events(limit: int = 50, force_refresh: bool = False):
+    return await market_intel_service.live_structured_events(limit=limit, force_refresh=force_refresh)
+
+
+@app.get("/events/clusters")
+async def event_clusters(force_refresh: bool = False):
+    if force_refresh:
+        await market_intel_service.live_structured_events(force_refresh=True)
+    return market_intel_service.list_event_clusters()
+
+
+@app.get("/watchlist/triggers")
+async def watchlist_triggers(force_refresh: bool = False):
+    if force_refresh:
+        await market_intel_service.live_structured_events(force_refresh=True)
+    return market_intel_service.list_watchlist_triggers()
+
+
 @app.get("/candidates/live")
 async def live_candidates(limit: int = 5, force_refresh: bool = False):
     return await market_intel_service.live_candidates(limit=limit, force_refresh=force_refresh)
@@ -62,3 +82,11 @@ async def parse_disclosure(request: DisclosureParseRequest):
 @app.post("/dart/corp-codes")
 async def sync_corp_codes():
     return await market_intel_service.sync_corp_codes()
+
+
+@app.get("/dart/disclosures")
+async def list_disclosures(begin: str, end: str):
+    return await market_intel_service.list_latest_disclosures(
+        begin=date.fromisoformat(begin),
+        end=date.fromisoformat(end),
+    )

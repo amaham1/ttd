@@ -13,6 +13,10 @@ configure_logging(settings.app_log_level)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    try:
+        await shadow_live_service.restore_loop_if_needed()
+    except Exception as exc:
+        shadow_live_service.loop_last_error = str(exc)
     yield
     await shadow_live_service.close()
 
@@ -44,6 +48,24 @@ async def snapshot():
 @app.get("/loop/status")
 async def loop_status():
     return shadow_live_service.loop_snapshot()
+
+
+@app.get("/plan/latest")
+async def latest_plan():
+    return shadow_live_service.last_execution_plan
+
+
+@app.get("/preview/micro-test-candidates")
+async def preview_micro_test_candidates(force_refresh: bool = False, limit: int = 10):
+    return await shadow_live_service.preview_micro_test_candidates(
+        force_refresh=force_refresh,
+        limit=limit,
+    )
+
+
+@app.get("/verify/post-trade/latest")
+async def verify_post_trade_latest():
+    return await shadow_live_service.verify_latest_execution()
 
 
 @app.post("/loop/start")

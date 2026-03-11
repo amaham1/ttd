@@ -158,6 +158,12 @@ p {
   background: linear-gradient(160deg, rgba(247, 167, 108, 0.18), rgba(255, 255, 255, 0.04));
 }
 
+.hero-actions {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -186,6 +192,10 @@ p {
 
 .panel {
   padding: 20px;
+}
+
+.compact-stack {
+  gap: 14px;
 }
 
 .panel-header {
@@ -221,6 +231,11 @@ p {
   gap: 8px;
 }
 
+.emphasis-row {
+  background:
+    linear-gradient(135deg, rgba(247, 167, 108, 0.18), rgba(255, 255, 255, 0.04));
+}
+
 .badge {
   display: inline-flex;
   align-items: center;
@@ -253,9 +268,47 @@ p {
   gap: 16px;
 }
 
+.detail-span-2 {
+  grid-column: span 2;
+}
+
 .detail-label {
   margin-bottom: 6px;
   color: rgba(244, 239, 232, 0.64);
+}
+
+.callout {
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.callout-positive {
+  background:
+    linear-gradient(145deg, rgba(126, 240, 170, 0.12), rgba(255, 255, 255, 0.04));
+}
+
+.helper-copy {
+  margin-top: 8px;
+  color: rgba(244, 239, 232, 0.64);
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f8efe5;
+  font-size: 0.82rem;
 }
 
 .table {
@@ -289,6 +342,78 @@ p {
   cursor: default;
 }
 
+.secondary-button,
+.danger-button {
+  border: 0;
+  padding: 12px 18px;
+  border-radius: 14px;
+  cursor: pointer;
+}
+
+.secondary-button {
+  color: #fff4ea;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.danger-button {
+  color: #fff2f2;
+  background: linear-gradient(135deg, rgba(255, 117, 117, 0.88), rgba(196, 57, 57, 0.88));
+}
+
+.secondary-button:disabled,
+.danger-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.auto-loop-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.control-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.control-field {
+  display: grid;
+  gap: 8px;
+}
+
+.control-field span {
+  color: rgba(244, 239, 232, 0.68);
+}
+
+.control-field input {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 12px 14px;
+  color: #fff4ea;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.control-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.status-banner {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  color: #fbefe2;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.status-banner-error {
+  background: rgba(255, 117, 117, 0.14);
+  color: #ffb3b3;
+}
+
 .monospace {
   font-family: "IBM Plex Mono", "Cascadia Code", monospace;
 }
@@ -305,8 +430,13 @@ p {
 
   .metric-grid,
   .two-column,
+  .control-grid,
   .detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .detail-span-2 {
+    grid-column: span 1;
   }
 
   .hero-card,
