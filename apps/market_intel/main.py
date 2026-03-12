@@ -14,7 +14,9 @@ configure_logging(settings.app_log_level)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    await market_intel_service.start_background_tasks()
     yield
+    await market_intel_service.stop_background_tasks()
     await market_intel_service.dart_client.close()
     await market_intel_service.parser_client.close()
 
@@ -64,6 +66,29 @@ async def watchlist_triggers(force_refresh: bool = False):
     if force_refresh:
         await market_intel_service.live_structured_events(force_refresh=True)
     return market_intel_service.list_watchlist_triggers()
+
+
+@app.get("/profiles/snapshot")
+async def profile_snapshot():
+    return market_intel_service.instrument_profile_snapshot()
+
+
+@app.get("/profiles")
+async def instrument_profiles(limit: int = 50):
+    return market_intel_service.list_instrument_profiles(limit=limit)
+
+
+@app.post("/profiles/reprofile")
+async def reprofile_profiles(limit: int | None = None, force: bool = False):
+    return await market_intel_service.reprofile_stale_instrument_profiles(limit=limit, force=force)
+
+
+@app.get("/diagnostics/pipeline")
+async def pipeline_diagnostics(force_refresh: bool = False, limit: int = 20):
+    return await market_intel_service.pipeline_diagnostics(
+        force_refresh=force_refresh,
+        limit=limit,
+    )
 
 
 @app.get("/candidates/live")

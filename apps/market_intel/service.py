@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections import defaultdict
+import asyncio
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -18,6 +19,8 @@ from libs.contracts.messages import (
     TradeCandidate,
     WatchlistTrigger,
 )
+from libs.db.base import SessionLocal
+from libs.db.repositories import TradingRepository
 from libs.domain.enums import OrderSide
 
 
@@ -383,10 +386,11 @@ def _build_positive_rule_specs() -> list[DisclosureRuleSpec]:
 
 
 class MarketIntelService:
-    def __init__(self) -> None:
+    def __init__(self, repository: TradingRepository | None = None) -> None:
         self.settings = get_settings()
         self.dart_client = OpenDARTClient()
         self.parser_client = OpenAIParserClient()
+        self.repository = repository or TradingRepository(SessionLocal)
         self._block_rule_specs = sorted(_build_block_rule_specs(), key=lambda spec: spec.rule.priority)
         self._positive_rule_specs = sorted(_build_positive_rule_specs(), key=lambda spec: spec.rule.priority)
         self._live_candidate_cache: list[TradeCandidate] = []
@@ -396,6 +400,15 @@ class MarketIntelService:
         self._latest_event_clusters: list[EventCluster] = []
         self._latest_watchlist_triggers: list[WatchlistTrigger] = []
         self._event_history_by_key: dict[str, list[datetime]] = defaultdict(list)
+        self._profile_reprofile_task: asyncio.Task[None] | None = None
+        self._profile_reprofile_stop_event = asyncio.Event()
+        self._last_profile_reprofile_at_utc: datetime | None = None
+        self._last_profile_reprofile_summary: dict[str, int | str | None] = {
+            "scanned_count": 0,
+            "updated_count": 0,
+            "failed_count": 0,
+            "fallback_count": 0,
+        }
 
     def snapshot(self) -> MarketIntelSnapshot:
         low_confidence_count = len(
@@ -412,7 +425,7 @@ class MarketIntelService:
         )
         return MarketIntelSnapshot(
             disclosure_backlog=max(len(self._latest_candidate_decisions) - len(self._live_candidate_cache), 0),
-            parser_mode="RULES_PLUS_STRUCTURED_EVENTS",
+            parser_mode="RULES_PLUS_GEMINI_STRUCTURED_EVENTS",
             low_confidence_count=low_confidence_count,
             last_disclosure_utc=last_event_utc,
             structured_event_count=len(self._latest_structured_events),
@@ -517,6 +530,245 @@ class MarketIntelService:
 
     def list_watchlist_triggers(self) -> list[WatchlistTrigger]:
         return list(self._latest_watchlist_triggers)
+
+    def instrument_profile_snapshot(self) -> dict[str, int | bool | str | None]:
+        stale_before_utc = datetime.now(UTC).replace(tzinfo=None) - timedelta(
+            hours=max(int(self.settings.instrument_profile_stale_after_hours or 0), 1)
+        )
+        total_profiles = self.repository.count_instrument_profiles()
+        stale_profiles = self.repository.count_instrument_profiles(stale_before_utc=stale_before_utc)
+        summary = dict(self._last_profile_reprofile_summary)
+        summary["last_profile_reprofile_at_utc"] = (
+            self._last_profile_reprofile_at_utc.isoformat()
+            if self._last_profile_reprofile_at_utc is not None
+            else None
+        )
+        return {
+            "provider": "GEMINI",
+            "model": self.settings.google_model,
+            "reprofile_enabled": bool(self.settings.instrument_profile_reprofile_enabled),
+            "stale_after_hours": int(self.settings.instrument_profile_stale_after_hours),
+            "reprofile_interval_minutes": int(self.settings.instrument_profile_reprofile_interval_minutes),
+            "reprofile_batch_size": int(self.settings.instrument_profile_reprofile_batch_size),
+            "total_profiles": total_profiles,
+            "stale_profiles": stale_profiles,
+            "background_running": self._profile_reprofile_task is not None and not self._profile_reprofile_task.done(),
+            "last_reprofile_summary": summary,
+        }
+
+    def list_instrument_profiles(self, *, limit: int = 50) -> list[dict]:
+        rows = self.repository.list_instrument_profiles(limit=limit)
+        return [
+            {
+                "instrument_id": row.instrument_id,
+                "issuer_name": row.issuer_name,
+                "sector_name": row.sector_name,
+                "oil_up_beta": row.oil_up_beta,
+                "usdkrw_up_beta": row.usdkrw_up_beta,
+                "rates_up_beta": row.rates_up_beta,
+                "china_growth_beta": row.china_growth_beta,
+                "domestic_demand_beta": row.domestic_demand_beta,
+                "export_beta": row.export_beta,
+                "thematic_tags": list(row.thematic_tags),
+                "rationale": row.rationale,
+                "confidence_score": row.confidence_score,
+                "used_fallback": row.used_fallback,
+                "source_event_family": row.source_event_family,
+                "source_event_type": row.source_event_type,
+                "source_report_name": row.source_report_name,
+                "source_receipt_no": row.source_receipt_no,
+                "source_summary_text": row.source_summary_text,
+                "created_at_utc": row.created_at_utc.isoformat() if row.created_at_utc is not None else None,
+                "updated_at_utc": row.updated_at_utc.isoformat() if row.updated_at_utc is not None else None,
+            }
+            for row in rows
+        ]
+
+    async def reprofile_stale_instrument_profiles(
+        self,
+        *,
+        limit: int | None = None,
+        force: bool = False,
+    ) -> dict[str, int | str | list[str] | None]:
+        batch_limit = max(int(limit or self.settings.instrument_profile_reprofile_batch_size or 0), 1)
+        stale_before_utc = None
+        if not force:
+            stale_before_utc = datetime.now(UTC).replace(tzinfo=None) - timedelta(
+                hours=max(int(self.settings.instrument_profile_stale_after_hours or 0), 1)
+            )
+        rows = self.repository.list_instrument_profiles(limit=batch_limit, stale_before_utc=stale_before_utc)
+        scanned_count = len(rows)
+        updated_count = 0
+        failed_count = 0
+        fallback_count = 0
+        updated_symbols: list[str] = []
+        failed_symbols: list[str] = []
+
+        for row in rows:
+            try:
+                profile = await self.parser_client.infer_instrument_profile(
+                    issuer_name=row.issuer_name,
+                    report_name=row.source_report_name,
+                    event_family=row.source_event_family or "GENERAL",
+                    event_type=row.source_event_type or "GENERAL",
+                    summary=row.source_summary_text or row.rationale,
+                )
+                self.repository.upsert_instrument_profile(
+                    instrument_id=row.instrument_id,
+                    issuer_name=row.issuer_name,
+                    sector_name=profile.sector_name,
+                    oil_up_beta=profile.oil_up_beta,
+                    usdkrw_up_beta=profile.usdkrw_up_beta,
+                    rates_up_beta=profile.rates_up_beta,
+                    china_growth_beta=profile.china_growth_beta,
+                    domestic_demand_beta=profile.domestic_demand_beta,
+                    export_beta=profile.export_beta,
+                    thematic_tags=profile.thematic_tags,
+                    rationale=profile.rationale,
+                    confidence_score=profile.confidence,
+                    used_fallback=profile.used_fallback,
+                    source_event_family=row.source_event_family,
+                    source_event_type=row.source_event_type,
+                    source_report_name=row.source_report_name,
+                    source_receipt_no=row.source_receipt_no,
+                    source_summary_text=row.source_summary_text,
+                )
+                updated_count += 1
+                if profile.used_fallback:
+                    fallback_count += 1
+                updated_symbols.append(row.instrument_id)
+            except Exception:
+                failed_count += 1
+                failed_symbols.append(row.instrument_id)
+
+        self._last_profile_reprofile_at_utc = datetime.now(UTC)
+        self._last_profile_reprofile_summary = {
+            "scanned_count": scanned_count,
+            "updated_count": updated_count,
+            "failed_count": failed_count,
+            "fallback_count": fallback_count,
+        }
+        return {
+            "provider": "GEMINI",
+            "model": self.settings.google_model,
+            "scanned_count": scanned_count,
+            "updated_count": updated_count,
+            "failed_count": failed_count,
+            "fallback_count": fallback_count,
+            "forced": force,
+            "stale_after_hours": None if force else int(self.settings.instrument_profile_stale_after_hours),
+            "updated_symbols": updated_symbols,
+            "failed_symbols": failed_symbols,
+            "run_at_utc": self._last_profile_reprofile_at_utc.isoformat(),
+        }
+
+    async def start_background_tasks(self) -> None:
+        if not self.settings.instrument_profile_reprofile_enabled:
+            return
+        if self._profile_reprofile_task is not None and not self._profile_reprofile_task.done():
+            return
+        self._profile_reprofile_stop_event = asyncio.Event()
+        self._profile_reprofile_task = asyncio.create_task(self._profile_reprofile_loop())
+
+    async def stop_background_tasks(self) -> None:
+        self._profile_reprofile_stop_event.set()
+        if self._profile_reprofile_task is not None:
+            try:
+                await self._profile_reprofile_task
+            except Exception:
+                pass
+        self._profile_reprofile_task = None
+
+    async def _profile_reprofile_loop(self) -> None:
+        interval_seconds = max(int(self.settings.instrument_profile_reprofile_interval_minutes or 0), 1) * 60
+        while not self._profile_reprofile_stop_event.is_set():
+            try:
+                await self.reprofile_stale_instrument_profiles()
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(self._profile_reprofile_stop_event.wait(), timeout=interval_seconds)
+            except TimeoutError:
+                continue
+
+    async def pipeline_diagnostics(self, *, force_refresh: bool = False, limit: int = 20) -> dict:
+        await self.live_structured_events(force_refresh=force_refresh)
+
+        decisions = list(self._latest_candidate_decisions)
+        structured_events = list(self._latest_structured_events)
+        event_clusters = list(self._latest_event_clusters)
+        watchlist_triggers = list(self._latest_watchlist_triggers)
+        candidates = list(self._live_candidate_cache)
+
+        status_counts = Counter(
+            str(decision.candidate_status or "UNKNOWN")
+            for decision in decisions
+        )
+        positive_rule_counts = Counter(
+            str(decision.matched_positive_rule_id)
+            for decision in decisions
+            if decision.matched_positive_rule_id
+        )
+        block_rule_counts = Counter(
+            str(decision.matched_block_rule_id)
+            for decision in decisions
+            if decision.matched_block_rule_id
+        )
+        event_family_counts = Counter(event.event_family for event in structured_events)
+        event_type_counts = Counter(event.event_type for event in structured_events)
+        watchlist_reason_counts = Counter(trigger.reason_code for trigger in watchlist_triggers)
+
+        if not decisions:
+            summary_note = "오늘 처리한 공시 입력이 아직 없습니다."
+        elif not structured_events:
+            summary_note = "공시는 들어왔지만 허용 규칙과 매칭된 구조화 이벤트가 없습니다."
+        elif not watchlist_triggers:
+            summary_note = "구조화 이벤트는 생겼지만 워치리스트 트리거로 이어지지 않았습니다."
+        elif not candidates:
+            summary_note = "워치리스트는 생겼지만 즉시 거래 후보로 승격된 종목이 없습니다."
+        else:
+            summary_note = "시장 인텔 단계에서 거래 후보가 생성되었습니다."
+
+        return {
+            "snapshot": self.snapshot(),
+            "pipeline_counts": {
+                "disclosure_input_count": len(decisions),
+                "structured_event_count": len(structured_events),
+                "event_cluster_count": len(event_clusters),
+                "watchlist_trigger_count": len(watchlist_triggers),
+                "candidate_count": len(candidates),
+                "selected_candidate_count": sum(
+                    1 for decision in decisions if decision.candidate_status == "SELECTED"
+                ),
+            },
+            "status_counts": dict(sorted(status_counts.items())),
+            "positive_rule_counts": dict(sorted(positive_rule_counts.items())),
+            "block_rule_counts": dict(sorted(block_rule_counts.items())),
+            "event_family_counts": dict(sorted(event_family_counts.items())),
+            "event_type_counts": dict(sorted(event_type_counts.items())),
+            "watchlist_reason_counts": dict(sorted(watchlist_reason_counts.items())),
+            "summary_note": summary_note,
+            "recent_candidate_decisions": [
+                decision.model_dump(mode="json")
+                for decision in decisions[:limit]
+            ],
+            "recent_structured_events": [
+                event.model_dump(mode="json")
+                for event in structured_events[:limit]
+            ],
+            "recent_event_clusters": [
+                cluster.model_dump(mode="json")
+                for cluster in event_clusters[:limit]
+            ],
+            "recent_watchlist_triggers": [
+                trigger.model_dump(mode="json")
+                for trigger in watchlist_triggers[:limit]
+            ],
+            "recent_candidates": [
+                candidate.model_dump(mode="json")
+                for candidate in candidates[:limit]
+            ],
+        }
 
     def _match_rule(self, report_name: str, specs: list[DisclosureRuleSpec]) -> DisclosureRuleMatch:
         for spec in specs:
@@ -702,6 +954,66 @@ class MarketIntelService:
             event_ts_utc=event_ts_utc,
         )
 
+    async def _enrich_structured_event_market_profile(
+        self,
+        *,
+        structured_event: StructuredEvent,
+        report_name: str,
+    ) -> StructuredEvent:
+        try:
+            profile = await self.parser_client.infer_instrument_profile(
+                issuer_name=structured_event.issuer_name,
+                report_name=report_name,
+                event_family=structured_event.event_family,
+                event_type=structured_event.event_type,
+                summary=structured_event.extracted_summary,
+            )
+        except Exception as exc:
+            structured_event.extraction_payload["market_profile_error"] = str(exc)
+            return structured_event
+
+        structured_event.extraction_payload["market_profile"] = {
+            "sector_name": profile.sector_name,
+            "oil_up_beta": profile.oil_up_beta,
+            "usdkrw_up_beta": profile.usdkrw_up_beta,
+            "rates_up_beta": profile.rates_up_beta,
+            "china_growth_beta": profile.china_growth_beta,
+            "domestic_demand_beta": profile.domestic_demand_beta,
+            "export_beta": profile.export_beta,
+            "thematic_tags": profile.thematic_tags,
+            "rationale": profile.rationale,
+            "confidence": profile.confidence,
+            "used_fallback": profile.used_fallback,
+        }
+        if profile.sector_name and not structured_event.extraction_payload.get("sector_name"):
+            structured_event.extraction_payload["sector_name"] = profile.sector_name
+        if profile.thematic_tags:
+            structured_event.extraction_payload["thematic_tags"] = profile.thematic_tags
+        try:
+            self.repository.upsert_instrument_profile(
+                instrument_id=structured_event.instrument_id,
+                issuer_name=structured_event.issuer_name,
+                sector_name=profile.sector_name,
+                oil_up_beta=profile.oil_up_beta,
+                usdkrw_up_beta=profile.usdkrw_up_beta,
+                rates_up_beta=profile.rates_up_beta,
+                china_growth_beta=profile.china_growth_beta,
+                domestic_demand_beta=profile.domestic_demand_beta,
+                export_beta=profile.export_beta,
+                thematic_tags=profile.thematic_tags,
+                rationale=profile.rationale,
+                confidence_score=profile.confidence,
+                used_fallback=profile.used_fallback,
+                source_event_family=structured_event.event_family,
+                source_event_type=structured_event.event_type,
+                source_report_name=report_name,
+                source_receipt_no=structured_event.source_receipt_no,
+                source_summary_text=structured_event.extracted_summary,
+            )
+        except Exception as exc:
+            structured_event.extraction_payload["market_profile_persist_error"] = str(exc)
+        return structured_event
+
     def _build_event_clusters(self, structured_events: list[StructuredEvent]) -> list[EventCluster]:
         clusters: dict[str, list[StructuredEvent]] = defaultdict(list)
         for event in structured_events:
@@ -749,6 +1061,7 @@ class MarketIntelService:
                     trigger_type=trigger_type,
                     reason_code=reason_code,
                     priority=rank,
+                    created_at_utc=cluster.latest_event_ts_utc,
                     expires_at_utc=datetime.now(UTC) + timedelta(minutes=180 if abnormal_event else 480),
                     metadata={
                         "event_type": cluster.event_type,
@@ -806,6 +1119,7 @@ class MarketIntelService:
             source_event_ids=[structured_event.event_id],
             event_cluster_id=cluster.cluster_id,
             issuer_id=structured_event.issuer_id,
+            sector_name=str(structured_event.extraction_payload.get("sector_name") or "") or None,
             source_report_name=str(structured_event.extraction_payload.get("report_name") or ""),
             source_receipt_no=structured_event.source_receipt_no,
             matched_rule_id=matched_rule_id or None,
@@ -901,6 +1215,10 @@ class MarketIntelService:
                 receipt_no=receipt_no,
                 report_name=report_name,
                 event_ts_utc=event_ts_utc,
+            )
+            structured_event = await self._enrich_structured_event_market_profile(
+                structured_event=structured_event,
+                report_name=report_name,
             )
             structured_events.append(structured_event)
             decisions.append(

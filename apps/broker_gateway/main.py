@@ -145,6 +145,16 @@ async def list_reconciliation_breaks(limit: int = 100, open_only: bool = True):
     return runtime.list_reconciliation_breaks(limit=limit, open_only=open_only)
 
 
+@app.post("/reconciliation/breaks/{break_id}/resolve")
+async def resolve_reconciliation_break(break_id: str):
+    try:
+        return runtime.resolve_reconciliation_break(break_id=break_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="reconciliation break not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/reconciliation/run")
 async def run_reconciliation(request: ReconciliationRunRequest):
     return await runtime.run_intraday_reconciliation(trading_date=request.trading_date)

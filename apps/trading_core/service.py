@@ -13,6 +13,7 @@ from libs.contracts.messages import (
 from libs.config.settings import get_settings
 from libs.db.base import SessionLocal
 from libs.db.repositories import TradingRepository
+from libs.domain.enums import OrderSide
 from libs.risk.gate import evaluate_hard_block
 
 
@@ -96,11 +97,22 @@ class TradingCoreService:
         has_reconciliation_break: bool = False,
         has_risk_flag: bool = False,
     ) -> RiskGateDecision:
+        side = candidate.side
         if execution_readiness is not None:
             market_data_ok = execution_readiness.market_data_ok and execution_readiness.data_freshness_ok
+            account_permission_enabled = (
+                execution_readiness.account_exit_enabled
+                if side == OrderSide.SELL
+                else execution_readiness.account_entry_enabled
+            )
+            session_permission_allowed = (
+                execution_readiness.session_exit_allowed
+                if side == OrderSide.SELL
+                else execution_readiness.session_entry_allowed
+            )
             account_entry_enabled = (
-                execution_readiness.account_entry_enabled
-                and execution_readiness.session_entry_allowed
+                account_permission_enabled
+                and session_permission_allowed
                 and not execution_readiness.symbol_blocked
                 and execution_readiness.confidence_ok
                 and execution_readiness.vendor_healthy
@@ -115,24 +127,37 @@ class TradingCoreService:
             has_reconciliation_break=has_reconciliation_break,
             has_risk_flag=has_risk_flag,
         )
+        if side == OrderSide.SELL:
+            result.failed_gate_codes = [
+                "ACCOUNT_EXIT_DISABLED" if code == "ACCOUNT_ENTRY_DISABLED" else code
+                for code in result.failed_gate_codes
+            ]
+            result.reason_codes = [
+                "ACCOUNT_EXIT_DISABLED" if code == "ACCOUNT_ENTRY_DISABLED" else code
+                for code in result.reason_codes
+            ]
+        allowed_notional_hint: int | None
+        if result.hard_block:
+            allowed_notional_hint = None
+        elif candidate.side == OrderSide.SELL:
+            allowed_notional_hint = candidate.target_notional_krw
+        elif execution_readiness is not None and execution_readiness.max_allowed_notional_krw is not None:
+            allowed_notional_hint = min(candidate.target_notional_krw, execution_readiness.max_allowed_notional_krw)
+        else:
+            allowed_notional_hint = candidate.target_notional_krw
         return RiskGateDecision(
             candidate_id=candidate.candidate_id,
             account_id=candidate.account_scope,
             passed_gate_set_version="risk-gate-v2",
             penalty_bps_total=result.penalty_bps_total,
-            final_allowed_notional_hint=(
-                None
-                if result.hard_block
-                else (
-                    min(candidate.target_notional_krw, execution_readiness.max_allowed_notional_krw)
-                    if execution_readiness is not None and execution_readiness.max_allowed_notional_krw is not None
-                    else candidate.target_notional_krw
-                )
-            ),
+            final_allowed_notional_hint=allowed_notional_hint,
             hard_block=result.hard_block,
             failed_gate_codes=result.failed_gate_codes,
-            reason_codes=(
-                result.reason_codes + (execution_readiness.reason_codes if execution_readiness is not None else [])
+            reason_codes=list(
+                dict.fromkeys(
+                    result.reason_codes
+                    + (execution_readiness.reason_codes if execution_readiness is not None else [])
+                )
             ),
         )
 
@@ -142,8 +167,16 @@ class TradingCoreService:
         base_notional_krw = candidate.target_notional_krw
         if decision.final_allowed_notional_hint is not None:
             base_notional_krw = min(base_notional_krw, decision.final_allowed_notional_hint)
-        target_notional_krw, sizing_reason = self._quality_scaled_target(candidate, base_notional_krw)
-        target_qty = max(target_notional_krw // max(self.settings.trading_proxy_price_krw, 1), 0)
+        if candidate.side == OrderSide.SELL and (candidate.target_qty_override or 0) > 0:
+            target_notional_krw = max(base_notional_krw, 0)
+            target_qty = max(int(candidate.target_qty_override or 0), 0)
+            sizing_reason = (
+                candidate.selection_reason
+                or f"exit_target_qty={target_qty}, base_notional={target_notional_krw:,}KRW"
+            )
+        else:
+            target_notional_krw, sizing_reason = self._quality_scaled_target(candidate, base_notional_krw)
+            target_qty = max(target_notional_krw // max(self.settings.trading_proxy_price_krw, 1), 0)
         return TradeIntent(
             intent_id=f"intent-{uuid4().hex[:12]}",
             candidate_id=candidate.candidate_id,
@@ -173,24 +206,27 @@ class TradingCoreService:
         enforce_hard_value_cap: bool = False,
     ) -> OrderSubmitCommand:
         normalized_price_krw = max(price_krw, 1)
-        effective_notional_krw = intent.target_notional_krw
-        if max_order_value_krw is not None and max_order_value_krw > 0:
-            effective_notional_krw = min(effective_notional_krw, max_order_value_krw)
-        qty = effective_notional_krw // normalized_price_krw
-        if qty <= 0:
-            if enforce_hard_value_cap and max_order_value_krw is not None and max_order_value_krw > 0:
-                raise ValueError(
-                    f"single share price {normalized_price_krw:,}KRW exceeds micro test cap "
-                    f"{max_order_value_krw:,}KRW"
-                )
-            overshoot_tolerance = max(self.settings.trading_single_share_overshoot_tolerance_pct, 0.0) / 100.0
-            affordable_limit = effective_notional_krw * (1.0 + overshoot_tolerance)
-            if normalized_price_krw > affordable_limit:
-                raise ValueError(
-                    f"single share price {normalized_price_krw:,}KRW exceeds sizing limit "
-                    f"{effective_notional_krw:,}KRW"
-                )
-            qty = 1
+        if intent.side == OrderSide.SELL and intent.target_qty > 0:
+            qty = intent.target_qty
+        else:
+            effective_notional_krw = intent.target_notional_krw
+            if max_order_value_krw is not None and max_order_value_krw > 0:
+                effective_notional_krw = min(effective_notional_krw, max_order_value_krw)
+            qty = effective_notional_krw // normalized_price_krw
+            if qty <= 0:
+                if enforce_hard_value_cap and max_order_value_krw is not None and max_order_value_krw > 0:
+                    raise ValueError(
+                        f"single share price {normalized_price_krw:,}KRW exceeds micro test cap "
+                        f"{max_order_value_krw:,}KRW"
+                    )
+                overshoot_tolerance = max(self.settings.trading_single_share_overshoot_tolerance_pct, 0.0) / 100.0
+                affordable_limit = effective_notional_krw * (1.0 + overshoot_tolerance)
+                if normalized_price_krw > affordable_limit:
+                    raise ValueError(
+                        f"single share price {normalized_price_krw:,}KRW exceeds sizing limit "
+                        f"{effective_notional_krw:,}KRW"
+                    )
+                qty = 1
         return OrderSubmitCommand(
             internal_order_id=f"order-{uuid4().hex[:12]}",
             client_order_id=f"client-{uuid4().hex[:12]}",

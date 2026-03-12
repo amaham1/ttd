@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from apps.data_ingest.service import data_ingest_service
 from apps.shadow_live.service import shadow_live_service
 from libs.config.settings import get_settings
 from libs.observability.logging import configure_logging
@@ -66,6 +67,14 @@ async def preview_micro_test_candidates(force_refresh: bool = False, limit: int 
 @app.get("/verify/post-trade/latest")
 async def verify_post_trade_latest():
     return await shadow_live_service.verify_latest_execution()
+
+
+@app.get("/run-audit/summary")
+async def run_audit_summary(window_days: int | None = None, recent_limit: int = 10):
+    return data_ingest_service.shadow_live_metrics_summary(
+        window_days=window_days,
+        recent_limit=recent_limit,
+    )
 
 
 @app.post("/loop/start")

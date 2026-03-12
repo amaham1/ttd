@@ -79,6 +79,7 @@ button {
 h1,
 h2,
 h3,
+h4,
 p {
   margin-top: 0;
 }
@@ -204,6 +205,13 @@ p {
   gap: 12px;
   align-items: baseline;
   margin-bottom: 16px;
+}
+
+.panel-tools {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 .list {
@@ -368,7 +376,49 @@ p {
 
 .auto-loop-panel {
   display: grid;
-  gap: 18px;
+  gap: 14px;
+}
+
+.compact-panel {
+  padding: 16px 18px;
+  border-radius: 20px;
+}
+
+.compact-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.compact-stat-grid-6 {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.compact-stat {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.compact-stat span {
+  color: rgba(244, 239, 232, 0.66);
+  font-size: 0.82rem;
+}
+
+.compact-stat strong {
+  font-size: 1rem;
+}
+
+.compact-stat-detail {
+  margin-bottom: 0;
+  color: rgba(244, 239, 232, 0.56);
+  font-size: 0.82rem;
+}
+
+.compact-stat-detail-alert {
+  color: #ffb3b3;
 }
 
 .control-grid {
@@ -401,6 +451,10 @@ p {
   gap: 12px;
 }
 
+.compact-actions {
+  justify-content: flex-end;
+}
+
 .status-banner {
   margin: 0;
   padding: 12px 14px;
@@ -412,6 +466,293 @@ p {
 .status-banner-error {
   background: rgba(255, 117, 117, 0.14);
   color: #ffb3b3;
+}
+
+.compact-banner {
+  padding: 10px 12px;
+  font-size: 0.92rem;
+}
+
+.auto-loop-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 220px) minmax(0, 160px) 1fr;
+  gap: 12px;
+  align-items: end;
+}
+
+.inline-field {
+  display: grid;
+  gap: 6px;
+}
+
+.inline-field span {
+  color: rgba(244, 239, 232, 0.68);
+  font-size: 0.86rem;
+}
+
+.inline-field input {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: #fff4ea;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.dashboard-stack {
+  gap: 14px;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 1.35fr 1fr;
+  gap: 14px;
+  align-items: start;
+}
+
+.dashboard-lower-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.05fr;
+  gap: 14px;
+  align-items: start;
+}
+
+.ops-grid-3 {
+  display: grid;
+  grid-template-columns: 1.05fr 1.2fr 0.95fr;
+  gap: 14px;
+  align-items: start;
+}
+
+.ops-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.focus-block {
+  display: grid;
+  gap: 12px;
+}
+
+.focus-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(247, 167, 108, 0.14), rgba(255, 255, 255, 0.04));
+}
+
+.focus-header p,
+.mini-row p,
+.timeline-body p,
+.health-card p {
+  margin-bottom: 0;
+}
+
+.focus-meta,
+.mini-meta {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
+.kv-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.kv-cell {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.kv-cell span {
+  color: rgba(244, 239, 232, 0.62);
+  font-size: 0.82rem;
+}
+
+.dense-callouts {
+  display: grid;
+  gap: 10px;
+}
+
+.callout-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.diagnostic-board {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.diagnostic-column {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.diagnostic-section {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.diagnostic-row {
+  align-items: stretch;
+}
+
+.diagnostic-note {
+  margin-bottom: 0;
+  color: rgba(244, 239, 232, 0.62);
+  font-size: 0.86rem;
+}
+
+.diagnostic-chip-row {
+  margin-top: 0;
+}
+
+.diagnostic-timeline {
+  max-height: 940px;
+}
+
+.guidance-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.guidance-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.guidance-card h4,
+.guidance-card p,
+.guidance-card ol {
+  margin-bottom: 0;
+}
+
+.guidance-card strong {
+  color: #fff4ea;
+}
+
+.guidance-card-wide {
+  grid-column: span 2;
+}
+
+.guidance-list {
+  margin: 0;
+  padding-left: 18px;
+  color: rgba(244, 239, 232, 0.86);
+}
+
+.subpanel {
+  display: grid;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.subpanel-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.mini-list {
+  display: grid;
+  gap: 8px;
+}
+
+.mini-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.timeline {
+  display: grid;
+  gap: 8px;
+  max-height: 780px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.timeline-row {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.timeline-stamp {
+  color: rgba(244, 239, 232, 0.62);
+  font-size: 0.84rem;
+}
+
+.timeline-body {
+  display: grid;
+  gap: 6px;
+}
+
+.timeline-headline {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.health-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.health-card {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.health-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.dense-table th,
+.dense-table td {
+  padding: 10px 8px;
+  font-size: 0.9rem;
 }
 
 .monospace {
@@ -430,7 +771,17 @@ p {
 
   .metric-grid,
   .two-column,
+  .dashboard-grid,
+  .dashboard-lower-grid,
+  .ops-grid-3,
+  .ops-grid-2,
+  .compact-stat-grid,
+  .compact-stat-grid-6,
   .control-grid,
+  .auto-loop-controls,
+  .callout-grid,
+  .diagnostic-board,
+  .guidance-grid,
   .detail-grid {
     grid-template-columns: 1fr;
   }
@@ -439,9 +790,22 @@ p {
     grid-column: span 1;
   }
 
+  .guidance-card-wide {
+    grid-column: span 1;
+  }
+
   .hero-card,
-  .topbar {
+  .topbar,
+  .focus-header,
+  .mini-row,
+  .timeline-row,
+  .timeline-headline,
+  .health-card-head {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .timeline-row {
+    grid-template-columns: 1fr;
   }
 }

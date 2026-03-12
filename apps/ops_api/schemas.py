@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from libs.domain.enums import OperationMode
+from libs.domain.enums import OperationMode, OrderSide
 
 
 class KillSwitchRequest(BaseModel):
@@ -131,11 +131,13 @@ class ExecutionReadinessRequest(BaseModel):
     account_id: str
     strategy_id: str
     instrument_id: str
+    execution_side: OrderSide = OrderSide.BUY
     confidence_ok: bool = True
     market_data_ok: bool = True
     data_freshness_ok: bool = True
     vendor_healthy: bool = True
     session_entry_allowed: bool = True
+    session_exit_allowed: bool = True
     max_allowed_notional_krw: int | None = None
 
 

@@ -94,6 +94,7 @@ class Settings(BaseSettings):
     kis_live_require_arm: bool = Field(default=True, alias="KIS_LIVE_REQUIRE_ARM")
     kis_live_max_order_value_krw: int = Field(default=0, alias="KIS_LIVE_MAX_ORDER_VALUE_KRW")
     kis_live_allowed_symbols: str = Field(default="", alias="KIS_LIVE_ALLOWED_SYMBOLS")
+    kis_live_excluded_symbols: str = Field(default="", alias="KIS_LIVE_EXCLUDED_SYMBOLS")
     kis_live_daily_loss_limit_pct: float = Field(default=5.0, alias="KIS_LIVE_DAILY_LOSS_LIMIT_PCT")
     kis_live_min_total_equity_krw: int = Field(default=5000000, alias="KIS_LIVE_MIN_TOTAL_EQUITY_KRW")
     kis_live_common_stock_only: bool = Field(default=True, alias="KIS_LIVE_COMMON_STOCK_ONLY")
@@ -106,6 +107,16 @@ class Settings(BaseSettings):
         alias="TRADING_LIVE_ENTRY_SESSION_END_LOCAL_TIME",
     )
 
+    google_api_key: str = Field(default="", alias="GOOGLE_API_KEY")
+    google_model: str = Field(default="gemini-3-flash-preview", alias="GOOGLE_MODEL")
+    google_model_fallbacks: str = Field(
+        default="gemini-3-flash-preview,gemini-3.1-flash-lite-preview,gemini-2.5-flash-lite-preview-09-2025,gemini-2.5-flash-lite",
+        alias="GOOGLE_MODEL_FALLBACKS",
+    )
+    google_genai_base_url: str = Field(
+        default="https://generativelanguage.googleapis.com/v1beta",
+        alias="GOOGLE_GENAI_BASE_URL",
+    )
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_MODEL")
     opendart_api_key: str = Field(default="", alias="OPENDART_API_KEY")
@@ -149,6 +160,74 @@ class Settings(BaseSettings):
     news_research_query_limit_per_symbol: int = Field(
         default=3,
         alias="NEWS_RESEARCH_QUERY_LIMIT_PER_SYMBOL",
+    )
+    data_ingest_microstructure_auto_sync_enabled: bool = Field(
+        default=True,
+        alias="DATA_INGEST_MICROSTRUCTURE_AUTO_SYNC_ENABLED",
+    )
+    data_ingest_microstructure_sync_interval_seconds: int = Field(
+        default=30,
+        alias="DATA_INGEST_MICROSTRUCTURE_SYNC_INTERVAL_SECONDS",
+    )
+    data_ingest_microstructure_watchlist_limit: int = Field(
+        default=20,
+        alias="DATA_INGEST_MICROSTRUCTURE_WATCHLIST_LIMIT",
+    )
+    data_ingest_microstructure_quote_limit: int = Field(
+        default=40,
+        alias="DATA_INGEST_MICROSTRUCTURE_QUOTE_LIMIT",
+    )
+    data_ingest_microstructure_trade_limit: int = Field(
+        default=80,
+        alias="DATA_INGEST_MICROSTRUCTURE_TRADE_LIMIT",
+    )
+    data_ingest_microstructure_auto_start_ws: bool = Field(
+        default=True,
+        alias="DATA_INGEST_MICROSTRUCTURE_AUTO_START_WS",
+    )
+    data_ingest_microstructure_exact_symbol_set_enabled: bool = Field(
+        default=True,
+        alias="DATA_INGEST_MICROSTRUCTURE_EXACT_SYMBOL_SET_ENABLED",
+    )
+    data_ingest_microstructure_stop_ws_when_idle: bool = Field(
+        default=True,
+        alias="DATA_INGEST_MICROSTRUCTURE_STOP_WS_WHEN_IDLE",
+    )
+    data_ingest_microstructure_ws_warmup_seconds: float = Field(
+        default=1.0,
+        alias="DATA_INGEST_MICROSTRUCTURE_WS_WARMUP_SECONDS",
+    )
+    data_ingest_alternative_data_auto_sync_enabled: bool = Field(
+        default=True,
+        alias="DATA_INGEST_ALTERNATIVE_DATA_AUTO_SYNC_ENABLED",
+    )
+    data_ingest_alternative_data_sync_interval_seconds: int = Field(
+        default=1800,
+        alias="DATA_INGEST_ALTERNATIVE_DATA_SYNC_INTERVAL_SECONDS",
+    )
+    data_ingest_alternative_data_symbol_limit: int = Field(
+        default=12,
+        alias="DATA_INGEST_ALTERNATIVE_DATA_SYMBOL_LIMIT",
+    )
+    data_ingest_alternative_data_lookback_days: int = Field(
+        default=5,
+        alias="DATA_INGEST_ALTERNATIVE_DATA_LOOKBACK_DAYS",
+    )
+    data_ingest_alternative_data_price_bar_backfill_enabled: bool = Field(
+        default=True,
+        alias="DATA_INGEST_ALTERNATIVE_DATA_PRICE_BAR_BACKFILL_ENABLED",
+    )
+    data_ingest_alternative_data_investor_flow_backfill_enabled: bool = Field(
+        default=True,
+        alias="DATA_INGEST_ALTERNATIVE_DATA_INVESTOR_FLOW_BACKFILL_ENABLED",
+    )
+    data_ingest_alternative_data_short_interest_sync_enabled: bool = Field(
+        default=True,
+        alias="DATA_INGEST_ALTERNATIVE_DATA_SHORT_INTEREST_SYNC_ENABLED",
+    )
+    data_ingest_alternative_data_sector_flow_sync_enabled: bool = Field(
+        default=True,
+        alias="DATA_INGEST_ALTERNATIVE_DATA_SECTOR_FLOW_SYNC_ENABLED",
     )
 
     selector_top_n: int = Field(default=20, alias="SELECTOR_TOP_N")
@@ -258,6 +337,54 @@ class Settings(BaseSettings):
         default=True,
         alias="SHADOW_LIVE_REQUIRE_WS_LIVE_MARKET_DATA",
     )
+    shadow_live_side_rate_limit_window_seconds: int = Field(
+        default=60,
+        alias="SHADOW_LIVE_SIDE_RATE_LIMIT_WINDOW_SECONDS",
+    )
+    shadow_live_side_rate_limit_max_orders: int = Field(
+        default=2,
+        alias="SHADOW_LIVE_SIDE_RATE_LIMIT_MAX_ORDERS",
+    )
+    shadow_live_exit_stop_loss_pct: float = Field(
+        default=4.0,
+        alias="SHADOW_LIVE_EXIT_STOP_LOSS_PCT",
+    )
+    shadow_live_exit_take_profit_pct: float = Field(
+        default=9.0,
+        alias="SHADOW_LIVE_EXIT_TAKE_PROFIT_PCT",
+    )
+    shadow_live_exit_take_profit_fraction: float = Field(
+        default=0.5,
+        alias="SHADOW_LIVE_EXIT_TAKE_PROFIT_FRACTION",
+    )
+    shadow_live_exit_max_holding_days: int = Field(
+        default=5,
+        alias="SHADOW_LIVE_EXIT_MAX_HOLDING_DAYS",
+    )
+    shadow_live_exit_time_stop_min_return_pct: float = Field(
+        default=1.5,
+        alias="SHADOW_LIVE_EXIT_TIME_STOP_MIN_RETURN_PCT",
+    )
+    shadow_live_exit_min_position_value_krw: int = Field(
+        default=50000,
+        alias="SHADOW_LIVE_EXIT_MIN_POSITION_VALUE_KRW",
+    )
+    instrument_profile_stale_after_hours: int = Field(
+        default=168,
+        alias="INSTRUMENT_PROFILE_STALE_AFTER_HOURS",
+    )
+    instrument_profile_reprofile_batch_size: int = Field(
+        default=12,
+        alias="INSTRUMENT_PROFILE_REPROFILE_BATCH_SIZE",
+    )
+    instrument_profile_reprofile_interval_minutes: int = Field(
+        default=60,
+        alias="INSTRUMENT_PROFILE_REPROFILE_INTERVAL_MINUTES",
+    )
+    instrument_profile_reprofile_enabled: bool = Field(
+        default=True,
+        alias="INSTRUMENT_PROFILE_REPROFILE_ENABLED",
+    )
 
     @property
     def database_url(self) -> str:
@@ -281,6 +408,10 @@ class Settings(BaseSettings):
         return [symbol.strip() for symbol in self.kis_live_allowed_symbols.split(",") if symbol.strip()]
 
     @property
+    def kis_live_excluded_symbol_list(self) -> list[str]:
+        return [symbol.strip() for symbol in self.kis_live_excluded_symbols.split(",") if symbol.strip()]
+
+    @property
     def news_provider_list(self) -> list[str]:
         return [
             provider.strip().upper()
@@ -295,6 +426,14 @@ class Settings(BaseSettings):
     @property
     def google_news_rss_source_site_list(self) -> list[str]:
         return [site.strip() for site in self.google_news_rss_source_sites.split(",") if site.strip()]
+
+    @property
+    def google_model_candidate_list(self) -> list[str]:
+        return [
+            model.strip()
+            for model in self.google_model_fallbacks.split(",")
+            if model.strip()
+        ]
 
 
 @lru_cache

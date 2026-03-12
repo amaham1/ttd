@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Query, Response
 import httpx
 from pydantic import BaseModel
 
@@ -9,6 +9,7 @@ from apps.ops_api.schemas import (
     ReplayJobCreateRequest,
 )
 from apps.ops_api.store import store
+from libs.adapters.dart import OpenDARTClient
 from libs.config.settings import get_settings
 from libs.observability.logging import configure_logging
 
@@ -23,7 +24,8 @@ class StrategyToggleRequest(BaseModel):
 
 
 class AccountToggleRequest(BaseModel):
-    entry_enabled: bool
+    entry_enabled: bool | None = None
+    exit_enabled: bool | None = None
 
 
 class SymbolBlockRequest(BaseModel):
@@ -48,6 +50,78 @@ class LiveLoopCommandRequest(BaseModel):
 
 def _refresh_shared_state() -> None:
     store.reload_state()
+
+
+def _balance_query_payload() -> dict:
+    return {
+        "env": "prod",
+        "cano": settings.kis_account_no,
+        "acnt_prdt_cd": settings.kis_account_product_code,
+        "afhr_flpr_yn": "N",
+        "ofl_yn": "",
+        "inqr_dvsn": "02",
+        "unpr_dvsn": "01",
+        "fund_sttl_icld_yn": "N",
+        "fncg_amt_auto_rdpt_yn": "N",
+        "prcs_dvsn": "00",
+        "ctx_area_fk100": "",
+        "ctx_area_nk100": "",
+    }
+
+
+def _first_present(payload: dict, *keys: str) -> str | None:
+    for key in keys:
+        value = payload.get(key)
+        normalized = str(value or "").strip()
+        if normalized:
+            return normalized
+    return None
+
+
+def _extract_balance_name_map(payload: dict) -> dict[str, str]:
+    rows = payload.get("output1") or []
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not isinstance(rows, list):
+        return {}
+    name_by_symbol: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        symbol = _first_present(row, "pdno", "PDNO", "stck_shrn_iscd", "item_cd")
+        name = _first_present(
+            row,
+            "prdt_name",
+            "hts_kor_isnm",
+            "stck_kor_isnm",
+            "item_name",
+            "prdt_abrv_name",
+        )
+        if not symbol or not name:
+            continue
+        name_by_symbol[symbol] = name
+    return name_by_symbol
+
+
+def _load_pykrx_name_map(symbols: list[str]) -> dict[str, str]:
+    try:
+        from pykrx import stock
+    except Exception:
+        return {}
+
+    name_by_symbol: dict[str, str] = {}
+    for raw_symbol in symbols:
+        symbol = str(raw_symbol or "").strip()
+        if not symbol:
+            continue
+        try:
+            name = str(stock.get_market_ticker_name(symbol) or "").strip()
+        except Exception:
+            name = ""
+        if not name or name == symbol:
+            continue
+        name_by_symbol[symbol] = name
+    return name_by_symbol
 
 
 async def _post_service_json(
@@ -146,7 +220,13 @@ async def list_accounts():
 @app.post("/ops/accounts/{account_id}")
 async def update_account(account_id: str, request: AccountToggleRequest):
     _refresh_shared_state()
-    return store.set_account_entry_enabled(account_id, request.entry_enabled)
+    if request.entry_enabled is None and request.exit_enabled is None:
+        raise HTTPException(status_code=400, detail="entry_enabled or exit_enabled must be provided")
+    return store.set_account_permissions(
+        account_id,
+        entry_enabled=request.entry_enabled,
+        exit_enabled=request.exit_enabled,
+    )
 
 
 @app.get("/ops/symbol-blocks")
@@ -171,6 +251,98 @@ async def list_reconciliation_breaks():
 async def list_risk_flags():
     _refresh_shared_state()
     return list(store.risk_flags.values())
+
+
+@app.get("/ops/instrument-names")
+async def list_instrument_names(symbol: list[str] = Query(default=[])):
+    _refresh_shared_state()
+    resolved_entries = store.resolve_instrument_names(symbols=symbol)
+    unresolved_symbols = [
+        str(entry.get("symbol") or "").strip()
+        for entry in resolved_entries
+        if not entry.get("name")
+    ]
+    if not unresolved_symbols:
+        return resolved_entries
+
+    balance_name_by_symbol = store.cached_broker_balance_names()
+    if settings.kis_account_no and (
+        not balance_name_by_symbol
+        or store.broker_balance_name_cache_stale(ttl_seconds=120)
+    ):
+        try:
+            balance_payload = await _post_service_json(
+                base_url=settings.broker_gateway_url,
+                path="/query/balance",
+                payload=_balance_query_payload(),
+            )
+        except HTTPException:
+            balance_payload = {}
+        fetched_balance_names = _extract_balance_name_map(balance_payload)
+        if fetched_balance_names:
+            store.cache_broker_balance_names(fetched_balance_names)
+            balance_name_by_symbol = store.cached_broker_balance_names()
+
+    if not balance_name_by_symbol:
+        resolved_entries = store.resolve_instrument_names(symbols=symbol)
+    else:
+        resolved_entries = store.resolve_instrument_names(
+            symbols=symbol,
+            balance_name_by_symbol=balance_name_by_symbol,
+        )
+
+    unresolved_symbols = [
+        str(entry.get("symbol") or "").strip()
+        for entry in resolved_entries
+        if not entry.get("name")
+    ]
+    if unresolved_symbols and settings.opendart_api_key:
+        dart_name_by_symbol = store.cached_dart_symbol_names()
+        if not dart_name_by_symbol or store.dart_symbol_name_cache_stale(ttl_seconds=86400):
+            dart_client = OpenDARTClient(settings=settings)
+            try:
+                corp_codes = await dart_client.download_corp_codes()
+            except Exception:
+                corp_codes = []
+            finally:
+                await dart_client.close()
+            fetched_dart_names = {
+                str(code.stock_code).strip(): str(code.corp_name).strip()
+                for code in corp_codes
+                if code.stock_code and code.corp_name
+            }
+            if fetched_dart_names:
+                store.cache_dart_symbol_names(fetched_dart_names)
+                dart_name_by_symbol = store.cached_dart_symbol_names()
+        if dart_name_by_symbol:
+            resolved_entries = store.resolve_instrument_names(
+                symbols=symbol,
+                dart_name_by_symbol=dart_name_by_symbol,
+            )
+            unresolved_symbols = [
+                str(entry.get("symbol") or "").strip()
+                for entry in resolved_entries
+                if not entry.get("name")
+            ]
+
+    if unresolved_symbols:
+        pykrx_name_by_symbol = store.cached_pykrx_symbol_names()
+        missing_pykrx_symbols = [
+            unresolved_symbol
+            for unresolved_symbol in unresolved_symbols
+            if unresolved_symbol not in pykrx_name_by_symbol
+        ]
+        if missing_pykrx_symbols or store.pykrx_symbol_name_cache_stale(ttl_seconds=86400):
+            fetched_pykrx_names = _load_pykrx_name_map(unresolved_symbols)
+            if fetched_pykrx_names:
+                store.cache_pykrx_symbol_names(fetched_pykrx_names)
+                pykrx_name_by_symbol = store.cached_pykrx_symbol_names()
+        if pykrx_name_by_symbol:
+            resolved_entries = store.resolve_instrument_names(
+                symbols=symbol,
+                pykrx_name_by_symbol=pykrx_name_by_symbol,
+            )
+    return resolved_entries
 
 
 @app.get("/ops/sessions")
@@ -322,11 +494,13 @@ async def execution_readiness(request: ExecutionReadinessRequest):
         account_id=request.account_id,
         strategy_id=request.strategy_id,
         instrument_id=request.instrument_id,
+        execution_side=request.execution_side,
         confidence_ok=request.confidence_ok,
         market_data_ok=request.market_data_ok,
         data_freshness_ok=request.data_freshness_ok,
         vendor_healthy=request.vendor_healthy,
         session_entry_allowed=request.session_entry_allowed,
+        session_exit_allowed=request.session_exit_allowed,
         max_allowed_notional_krw=request.max_allowed_notional_krw,
     )
 

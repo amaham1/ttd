@@ -1,5 +1,7 @@
 import asyncio
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 import httpx
@@ -105,6 +107,35 @@ def test_execution_readiness_endpoint() -> None:
     assert body["instrument_id"] == "005930"
 
 
+def test_execution_readiness_endpoint_uses_exit_permission_for_sell() -> None:
+    previous_account = store.accounts["default"].model_copy(deep=True)
+    try:
+        update_response = client.post(
+            "/ops/accounts/default",
+            json={"exit_enabled": False},
+        )
+        assert update_response.status_code == 200
+        assert update_response.json()["exit_enabled"] is False
+
+        readiness_response = client.post(
+            "/ops/execution-readiness",
+            json={
+                "account_id": "default",
+                "strategy_id": "disclosure-alpha",
+                "instrument_id": "005930",
+                "execution_side": "sell",
+            },
+        )
+        assert readiness_response.status_code == 200
+        body = readiness_response.json()
+        assert body["execution_side"] == "sell"
+        assert body["account_exit_enabled"] is False
+        assert "ACCOUNT_EXIT_DISABLED" in body["reason_codes"]
+    finally:
+        store.accounts["default"] = previous_account
+        store._persist_without_audit()
+
+
 def test_audit_log_endpoint_records_control_plane_changes() -> None:
     response = client.post(
         "/ops/symbol-blocks/005930",
@@ -118,6 +149,167 @@ def test_audit_log_endpoint_records_control_plane_changes() -> None:
     assert body[0]["resource_type"] == "symbol_block"
     assert body[0]["resource_id"] == "005930"
     assert body[0]["reason_code"] == "TEST_BLOCK"
+
+
+def test_instrument_names_endpoint_resolves_profile_and_refreshes_stale_balance_cache() -> None:
+    monkeypatch = MonkeyPatch()
+    previous_cache = dict(store.instrument_name_cache)
+    previous_balance_cache = dict(store._broker_balance_name_cache)
+    previous_balance_updated_at = store._broker_balance_name_cache_updated_at_utc
+    previous_dart_cache = dict(store._dart_symbol_name_cache)
+    previous_dart_updated_at = store._dart_symbol_name_cache_updated_at_utc
+    store.instrument_name_cache = {}
+    store._broker_balance_name_cache = {"005935": "이전이름"}
+    store._broker_balance_name_cache_updated_at_utc = datetime.now(UTC) - timedelta(minutes=10)
+    store._dart_symbol_name_cache = {}
+    store._dart_symbol_name_cache_updated_at_utc = None
+
+    async def fake_post_service_json(*, base_url: str, path: str, payload: dict) -> dict:
+        assert path == "/query/balance"
+        return {
+            "output1": [
+                {"pdno": "005935", "prdt_name": "삼성전자우"},
+            ]
+        }
+
+    def fake_get_instrument_profile(symbol: str):
+        if symbol == "005930":
+            return SimpleNamespace(
+                issuer_name="삼성전자",
+                updated_at_utc=datetime(2026, 3, 12, 0, 0, tzinfo=UTC),
+            )
+        return None
+
+    monkeypatch.setattr(store.repository, "get_instrument_profile", fake_get_instrument_profile)
+    monkeypatch.setattr(ops_main_module, "_post_service_json", fake_post_service_json)
+    try:
+        response = client.get(
+            "/ops/instrument-names",
+            params=[("symbol", "005930"), ("symbol", "005935")],
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body[0]["symbol"] == "005930"
+        assert body[0]["name"] == "삼성전자"
+        assert body[0]["source"] == "INSTRUMENT_PROFILE"
+        assert body[1]["symbol"] == "005935"
+        assert body[1]["name"] == "삼성전자우"
+        assert body[1]["source"] == "BROKER_BALANCE"
+    finally:
+        store.instrument_name_cache = previous_cache
+        store._broker_balance_name_cache = previous_balance_cache
+        store._broker_balance_name_cache_updated_at_utc = previous_balance_updated_at
+        store._dart_symbol_name_cache = previous_dart_cache
+        store._dart_symbol_name_cache_updated_at_utc = previous_dart_updated_at
+        monkeypatch.undo()
+
+
+def test_instrument_names_endpoint_resolves_via_dart_corp_code_cache() -> None:
+    monkeypatch = MonkeyPatch()
+    previous_cache = dict(store.instrument_name_cache)
+    previous_balance_cache = dict(store._broker_balance_name_cache)
+    previous_balance_updated_at = store._broker_balance_name_cache_updated_at_utc
+    previous_dart_cache = dict(store._dart_symbol_name_cache)
+    previous_dart_updated_at = store._dart_symbol_name_cache_updated_at_utc
+    previous_pykrx_cache = dict(store._pykrx_symbol_name_cache)
+    previous_pykrx_updated_at = store._pykrx_symbol_name_cache_updated_at_utc
+    previous_opendart_api_key = ops_main_module.settings.opendart_api_key
+    store.instrument_name_cache = {}
+    store._broker_balance_name_cache = {}
+    store._broker_balance_name_cache_updated_at_utc = None
+    store._dart_symbol_name_cache = {}
+    store._dart_symbol_name_cache_updated_at_utc = None
+    store._pykrx_symbol_name_cache = {}
+    store._pykrx_symbol_name_cache_updated_at_utc = None
+    ops_main_module.settings.opendart_api_key = "test-dart-key"
+
+    class FakeOpenDARTClient:
+        def __init__(self, settings):
+            self.settings = settings
+
+        async def download_corp_codes(self):
+            return [
+                SimpleNamespace(stock_code="005935", corp_name="삼성전자우"),
+            ]
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(store.repository, "get_instrument_profile", lambda symbol: None)
+    monkeypatch.setattr(ops_main_module, "OpenDARTClient", FakeOpenDARTClient)
+    try:
+        response = client.get(
+            "/ops/instrument-names",
+            params=[("symbol", "005935")],
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body == [
+            {
+                "symbol": "005935",
+                "name": "삼성전자우",
+                "source": "DART_CORP_CODE",
+                "updated_at_utc": body[0]["updated_at_utc"],
+            }
+        ]
+    finally:
+        store.instrument_name_cache = previous_cache
+        store._broker_balance_name_cache = previous_balance_cache
+        store._broker_balance_name_cache_updated_at_utc = previous_balance_updated_at
+        store._dart_symbol_name_cache = previous_dart_cache
+        store._dart_symbol_name_cache_updated_at_utc = previous_dart_updated_at
+        store._pykrx_symbol_name_cache = previous_pykrx_cache
+        store._pykrx_symbol_name_cache_updated_at_utc = previous_pykrx_updated_at
+        ops_main_module.settings.opendart_api_key = previous_opendart_api_key
+        monkeypatch.undo()
+
+
+def test_instrument_names_endpoint_resolves_via_pykrx_fallback() -> None:
+    monkeypatch = MonkeyPatch()
+    previous_cache = dict(store.instrument_name_cache)
+    previous_balance_cache = dict(store._broker_balance_name_cache)
+    previous_balance_updated_at = store._broker_balance_name_cache_updated_at_utc
+    previous_dart_cache = dict(store._dart_symbol_name_cache)
+    previous_dart_updated_at = store._dart_symbol_name_cache_updated_at_utc
+    previous_pykrx_cache = dict(store._pykrx_symbol_name_cache)
+    previous_pykrx_updated_at = store._pykrx_symbol_name_cache_updated_at_utc
+    previous_opendart_api_key = ops_main_module.settings.opendart_api_key
+    store.instrument_name_cache = {}
+    store._broker_balance_name_cache = {}
+    store._broker_balance_name_cache_updated_at_utc = None
+    store._dart_symbol_name_cache = {}
+    store._dart_symbol_name_cache_updated_at_utc = None
+    store._pykrx_symbol_name_cache = {}
+    store._pykrx_symbol_name_cache_updated_at_utc = None
+    ops_main_module.settings.opendart_api_key = ""
+
+    monkeypatch.setattr(store.repository, "get_instrument_profile", lambda symbol: None)
+    monkeypatch.setattr(ops_main_module, "_load_pykrx_name_map", lambda symbols: {"005935": "삼성전자우"})
+    try:
+        response = client.get(
+            "/ops/instrument-names",
+            params=[("symbol", "005935")],
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body == [
+            {
+                "symbol": "005935",
+                "name": "삼성전자우",
+                "source": "PYKRX",
+                "updated_at_utc": body[0]["updated_at_utc"],
+            }
+        ]
+    finally:
+        store.instrument_name_cache = previous_cache
+        store._broker_balance_name_cache = previous_balance_cache
+        store._broker_balance_name_cache_updated_at_utc = previous_balance_updated_at
+        store._dart_symbol_name_cache = previous_dart_cache
+        store._dart_symbol_name_cache_updated_at_utc = previous_dart_updated_at
+        store._pykrx_symbol_name_cache = previous_pykrx_cache
+        store._pykrx_symbol_name_cache_updated_at_utc = previous_pykrx_updated_at
+        ops_main_module.settings.opendart_api_key = previous_opendart_api_key
+        monkeypatch.undo()
 
 
 def test_reconciliation_break_endpoint_reads_repository_backed_breaks() -> None:

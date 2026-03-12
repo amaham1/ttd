@@ -258,6 +258,8 @@ services:
       REPLAY_RUNNER_PROXY_TARGET: http://replay-runner:8004
       SHADOW_LIVE_PROXY_TARGET: http://shadow-live:8005
       DATA_INGEST_PROXY_TARGET: http://data-ingest:8006
+      SELECTOR_ENGINE_PROXY_TARGET: http://selector-engine:8008
+      PORTFOLIO_ENGINE_PROXY_TARGET: http://portfolio-engine:8009
     ports:
       - "5173:5173"
     depends_on:
@@ -268,6 +270,8 @@ services:
       - replay-runner
       - shadow-live
       - data-ingest
+      - selector-engine
+      - portfolio-engine
 
   mariadb:
     image: mariadb:11.4

@@ -628,6 +628,38 @@ class BrokerGatewayRuntime:
         items.sort(key=lambda item: item.get("detected_at_utc") or "", reverse=True)
         return items[:limit]
 
+    def resolve_reconciliation_break(self, *, break_id: str) -> dict[str, Any]:
+        normalized_break_id = str(break_id or "").strip()
+        if not normalized_break_id:
+            raise KeyError("break not found")
+        target_break = next(
+            (
+                item
+                for item in self.list_reconciliation_breaks(limit=1000, open_only=False)
+                if str(item.get("break_id") or "").strip() == normalized_break_id
+            ),
+            None,
+        )
+        if target_break is None:
+            raise KeyError("break not found")
+
+        scope_type = str(target_break.get("scope_type") or "").strip()
+        scope_id = str(target_break.get("scope_id") or "").strip()
+        resolved_count = self._resolve_reconciliation_break_scope(
+            scope_type=scope_type,
+            scope_id=scope_id,
+        )
+        resolved_at_utc = datetime.now(UTC).isoformat()
+        updated_break = {
+            **target_break,
+            "status_code": "RESOLVED",
+            "resolved_at_utc": resolved_at_utc,
+            "resolved_count": resolved_count,
+        }
+        if normalized_break_id in self.reconciliation_breaks:
+            self.reconciliation_breaks[normalized_break_id] = updated_break
+        return updated_break
+
     @staticmethod
     def _is_nonlive_order_id(order_id: str | None) -> bool:
         if not order_id:
@@ -1609,16 +1641,20 @@ class BrokerGatewayRuntime:
             "live_pause_reason": self.live_pause_reason,
         }
 
-    async def _ensure_common_stock_symbol(self, symbol: str) -> None:
+    async def _ensure_tradeable_equity_symbol(self, symbol: str) -> None:
         settings = get_settings()
+        if symbol in settings.kis_live_excluded_symbol_list:
+            raise LiveTradingGuardError(f"symbol {symbol} is excluded by KIS_LIVE_EXCLUDED_SYMBOLS")
         if not settings.kis_live_common_stock_only:
             return
         try:
-            is_common = await self.common_stock_universe.is_common_stock(symbol)
+            is_tradeable_equity = await self.common_stock_universe.is_common_or_preferred_stock(symbol)
         except CommonStockUniverseError as exc:
-            raise LiveTradingGuardError(f"failed to verify common stock universe: {exc}") from exc
-        if not is_common:
-            raise LiveTradingGuardError(f"symbol {symbol} is not recognized as a regular listed stock")
+            raise LiveTradingGuardError(f"failed to verify listed equity universe: {exc}") from exc
+        if not is_tradeable_equity:
+            raise LiveTradingGuardError(
+                f"symbol {symbol} is not recognized as a listed common or preferred stock"
+            )
 
     async def _ensure_live_order_allowed(self, payload: dict[str, Any]) -> None:
         settings = get_settings()
@@ -1638,7 +1674,7 @@ class BrokerGatewayRuntime:
         if allowed_symbols and symbol and symbol not in allowed_symbols:
             raise LiveTradingGuardError(f"symbol {symbol} is not in KIS_LIVE_ALLOWED_SYMBOLS")
         if symbol:
-            await self._ensure_common_stock_symbol(symbol)
+            await self._ensure_tradeable_equity_symbol(symbol)
 
         qty = int(payload.get("ord_qty", 0))
         price = int(float(payload.get("ord_unpr", 0)))

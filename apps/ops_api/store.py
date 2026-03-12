@@ -9,7 +9,7 @@ from libs.config.settings import get_settings
 from libs.contracts.messages import ExecutionReadiness
 from libs.db.base import SessionLocal
 from libs.db.repositories import TradingRepository
-from libs.domain.enums import OperationMode
+from libs.domain.enums import OperationMode, OrderSide
 from libs.replay.service import replay_job_service
 
 from apps.ops_api.schemas import (
@@ -62,6 +62,13 @@ class InMemoryOpsStore:
         self.positions: dict[str, PositionState] = {}
         self.loop_states: dict[str, LoopSchedulerState] = {}
         self.live_control = LiveControlState()
+        self.instrument_name_cache: dict[str, dict[str, Any]] = {}
+        self._broker_balance_name_cache: dict[str, str] = {}
+        self._broker_balance_name_cache_updated_at_utc: datetime | None = None
+        self._dart_symbol_name_cache: dict[str, str] = {}
+        self._dart_symbol_name_cache_updated_at_utc: datetime | None = None
+        self._pykrx_symbol_name_cache: dict[str, str] = {}
+        self._pykrx_symbol_name_cache_updated_at_utc: datetime | None = None
         self.audit_events = []
 
     def _state_path(self) -> Path:
@@ -243,6 +250,209 @@ class InMemoryOpsStore:
     def list_audit_events(self, *, limit: int = 50) -> list[ControlPlaneAuditEvent]:
         capped_limit = max(limit, 1)
         return self.audit_events[:capped_limit]
+
+    @staticmethod
+    def _normalize_symbol_list(symbols: list[str]) -> list[str]:
+        normalized_symbols: list[str] = []
+        seen: set[str] = set()
+        for raw_symbol in symbols:
+            symbol = str(raw_symbol or "").strip()
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            normalized_symbols.append(symbol)
+        return normalized_symbols
+
+    def cache_broker_balance_names(self, name_by_symbol: dict[str, str]) -> None:
+        now = datetime.now(UTC)
+        normalized: dict[str, str] = {}
+        for raw_symbol, raw_name in name_by_symbol.items():
+            symbol = str(raw_symbol or "").strip()
+            name = str(raw_name or "").strip()
+            if not symbol or not name:
+                continue
+            normalized[symbol] = name
+            self.instrument_name_cache[symbol] = {
+                "symbol": symbol,
+                "name": name,
+                "source": "BROKER_BALANCE",
+                "updated_at_utc": now.isoformat(),
+            }
+        if normalized:
+            self._broker_balance_name_cache.update(normalized)
+            self._broker_balance_name_cache_updated_at_utc = now
+
+    def broker_balance_name_cache_stale(self, *, ttl_seconds: int = 120) -> bool:
+        if self._broker_balance_name_cache_updated_at_utc is None:
+            return True
+        effective_ttl_seconds = max(int(ttl_seconds), 1)
+        return datetime.now(UTC) - self._broker_balance_name_cache_updated_at_utc > timedelta(
+            seconds=effective_ttl_seconds,
+        )
+
+    def cached_broker_balance_names(self) -> dict[str, str]:
+        return dict(self._broker_balance_name_cache)
+
+    def cache_dart_symbol_names(self, name_by_symbol: dict[str, str]) -> None:
+        now = datetime.now(UTC)
+        normalized: dict[str, str] = {}
+        for raw_symbol, raw_name in name_by_symbol.items():
+            symbol = str(raw_symbol or "").strip()
+            name = str(raw_name or "").strip()
+            if not symbol or not name:
+                continue
+            normalized[symbol] = name
+            self.instrument_name_cache[symbol] = {
+                "symbol": symbol,
+                "name": name,
+                "source": "DART_CORP_CODE",
+                "updated_at_utc": now.isoformat(),
+            }
+        if normalized:
+            self._dart_symbol_name_cache.update(normalized)
+            self._dart_symbol_name_cache_updated_at_utc = now
+
+    def dart_symbol_name_cache_stale(self, *, ttl_seconds: int = 86400) -> bool:
+        if self._dart_symbol_name_cache_updated_at_utc is None:
+            return True
+        effective_ttl_seconds = max(int(ttl_seconds), 1)
+        return datetime.now(UTC) - self._dart_symbol_name_cache_updated_at_utc > timedelta(
+            seconds=effective_ttl_seconds,
+        )
+
+    def cached_dart_symbol_names(self) -> dict[str, str]:
+        return dict(self._dart_symbol_name_cache)
+
+    def cache_pykrx_symbol_names(self, name_by_symbol: dict[str, str]) -> None:
+        now = datetime.now(UTC)
+        normalized: dict[str, str] = {}
+        for raw_symbol, raw_name in name_by_symbol.items():
+            symbol = str(raw_symbol or "").strip()
+            name = str(raw_name or "").strip()
+            if not symbol or not name:
+                continue
+            normalized[symbol] = name
+            self.instrument_name_cache[symbol] = {
+                "symbol": symbol,
+                "name": name,
+                "source": "PYKRX",
+                "updated_at_utc": now.isoformat(),
+            }
+        if normalized:
+            self._pykrx_symbol_name_cache.update(normalized)
+            self._pykrx_symbol_name_cache_updated_at_utc = now
+
+    def pykrx_symbol_name_cache_stale(self, *, ttl_seconds: int = 86400) -> bool:
+        if self._pykrx_symbol_name_cache_updated_at_utc is None:
+            return True
+        effective_ttl_seconds = max(int(ttl_seconds), 1)
+        return datetime.now(UTC) - self._pykrx_symbol_name_cache_updated_at_utc > timedelta(
+            seconds=effective_ttl_seconds,
+        )
+
+    def cached_pykrx_symbol_names(self) -> dict[str, str]:
+        return dict(self._pykrx_symbol_name_cache)
+
+    def resolve_instrument_names(
+        self,
+        *,
+        symbols: list[str],
+        balance_name_by_symbol: dict[str, str] | None = None,
+        dart_name_by_symbol: dict[str, str] | None = None,
+        pykrx_name_by_symbol: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        normalized_symbols = self._normalize_symbol_list(symbols)
+        if balance_name_by_symbol:
+            self.cache_broker_balance_names(balance_name_by_symbol)
+        if dart_name_by_symbol:
+            self.cache_dart_symbol_names(dart_name_by_symbol)
+        if pykrx_name_by_symbol:
+            self.cache_pykrx_symbol_names(pykrx_name_by_symbol)
+
+        entries: list[dict[str, Any]] = []
+        for symbol in normalized_symbols:
+            cached = self.instrument_name_cache.get(symbol)
+            if cached and cached.get("name"):
+                entries.append(dict(cached))
+                continue
+
+            profile = None
+            try:
+                profile = self.repository.get_instrument_profile(symbol)
+            except Exception:
+                profile = None
+
+            if profile is not None and profile.issuer_name:
+                entry = {
+                    "symbol": symbol,
+                    "name": str(profile.issuer_name).strip(),
+                    "source": "INSTRUMENT_PROFILE",
+                    "updated_at_utc": (
+                        profile.updated_at_utc.isoformat()
+                        if profile.updated_at_utc is not None
+                        else None
+                    ),
+                }
+                self.instrument_name_cache[symbol] = entry
+                entries.append(dict(entry))
+                continue
+
+            cached_balance_name = self._broker_balance_name_cache.get(symbol)
+            if cached_balance_name:
+                entry = {
+                    "symbol": symbol,
+                    "name": cached_balance_name,
+                    "source": "BROKER_BALANCE",
+                    "updated_at_utc": (
+                        self._broker_balance_name_cache_updated_at_utc.isoformat()
+                        if self._broker_balance_name_cache_updated_at_utc is not None
+                        else None
+                    ),
+                }
+                self.instrument_name_cache[symbol] = entry
+                entries.append(dict(entry))
+                continue
+
+            cached_dart_name = self._dart_symbol_name_cache.get(symbol)
+            if cached_dart_name:
+                entry = {
+                    "symbol": symbol,
+                    "name": cached_dart_name,
+                    "source": "DART_CORP_CODE",
+                    "updated_at_utc": (
+                        self._dart_symbol_name_cache_updated_at_utc.isoformat()
+                        if self._dart_symbol_name_cache_updated_at_utc is not None
+                        else None
+                    ),
+                }
+                self.instrument_name_cache[symbol] = entry
+                entries.append(dict(entry))
+                continue
+
+            cached_pykrx_name = self._pykrx_symbol_name_cache.get(symbol)
+            if cached_pykrx_name:
+                entry = {
+                    "symbol": symbol,
+                    "name": cached_pykrx_name,
+                    "source": "PYKRX",
+                    "updated_at_utc": (
+                        self._pykrx_symbol_name_cache_updated_at_utc.isoformat()
+                        if self._pykrx_symbol_name_cache_updated_at_utc is not None
+                        else None
+                    ),
+                }
+                self.instrument_name_cache[symbol] = entry
+                entries.append(dict(entry))
+                continue
+
+            unresolved_entry = {
+                "symbol": symbol,
+                "name": None,
+                "source": None,
+                "updated_at_utc": None,
+            }
+            entries.append(unresolved_entry)
+        return entries
 
     def list_reconciliation_breaks(self, *, limit: int = 100) -> list[BreakState]:
         try:
@@ -514,23 +724,38 @@ class InMemoryOpsStore:
         )
         return state
 
-    def set_account_entry_enabled(self, account_id: str, enabled: bool) -> AccountState:
+    def set_account_permissions(
+        self,
+        account_id: str,
+        *,
+        entry_enabled: bool | None = None,
+        exit_enabled: bool | None = None,
+    ) -> AccountState:
         current = self.accounts.get(
             account_id,
             AccountState(account_id=account_id, entry_enabled=True, exit_enabled=True),
         )
         before = current.model_copy(deep=True)
-        current.entry_enabled = enabled
+        if entry_enabled is not None:
+            current.entry_enabled = bool(entry_enabled)
+        if exit_enabled is not None:
+            current.exit_enabled = bool(exit_enabled)
         current.updated_at_utc = datetime.now(UTC)
         self.accounts[account_id] = current
         self._commit(
-            action="SET_ACCOUNT_ENTRY_ENABLED",
+            action="SET_ACCOUNT_PERMISSIONS",
             resource_type="account",
             resource_id=account_id,
             before=before,
             after=current,
         )
         return current
+
+    def set_account_entry_enabled(self, account_id: str, enabled: bool) -> AccountState:
+        return self.set_account_permissions(account_id, entry_enabled=enabled)
+
+    def set_account_exit_enabled(self, account_id: str, enabled: bool) -> AccountState:
+        return self.set_account_permissions(account_id, exit_enabled=enabled)
 
     def set_symbol_block(self, symbol: str, blocked: bool, reason_code: str | None) -> SymbolBlockState:
         before = self.symbol_blocks.get(symbol)
@@ -586,11 +811,13 @@ class InMemoryOpsStore:
         account_id: str,
         strategy_id: str,
         instrument_id: str,
+        execution_side: OrderSide = OrderSide.BUY,
         confidence_ok: bool = True,
         market_data_ok: bool = True,
         data_freshness_ok: bool = True,
         vendor_healthy: bool = True,
         session_entry_allowed: bool = True,
+        session_exit_allowed: bool = True,
         max_allowed_notional_krw: int | None = None,
     ) -> ExecutionReadiness:
         account = self.accounts.get(account_id)
@@ -602,13 +829,23 @@ class InMemoryOpsStore:
         kill_switch_active = self.mode.mode == OperationMode.KILL_SWITCH
         effective_market_data_ok = market_data_ok
         effective_session_entry_allowed = session_entry_allowed
+        effective_session_exit_allowed = session_exit_allowed
         reason_codes: list[str] = []
+        effective_account_entry_enabled = account.entry_enabled if account is not None else True
+        effective_account_exit_enabled = account.exit_enabled if account is not None else True
+        if execution_side == OrderSide.BUY and self.mode.mode in {OperationMode.ENTRY_FROZEN, OperationMode.EXIT_ONLY}:
+            effective_account_entry_enabled = False
+            reason_codes.append(f"OPERATION_MODE_{self.mode.mode.value}")
         if strategy is not None and not strategy.enabled:
             reason_codes.append("STRATEGY_DISABLED")
         if symbol_block is not None and symbol_block.blocked:
             reason_codes.append(symbol_block.reason_code or "SYMBOL_BLOCKED")
         if risk_flag is not None and risk_flag.hard_block:
             reason_codes.append(risk_flag.flag_type)
+        if execution_side == OrderSide.BUY and not effective_account_entry_enabled:
+            reason_codes.append("ACCOUNT_ENTRY_DISABLED")
+        if execution_side == OrderSide.SELL and not effective_account_exit_enabled:
+            reason_codes.append("ACCOUNT_EXIT_DISABLED")
         if not confidence_ok:
             reason_codes.append("CONFIDENCE_FLOOR")
         if not vendor_healthy:
@@ -618,19 +855,24 @@ class InMemoryOpsStore:
         if session_state is not None:
             effective_market_data_ok = effective_market_data_ok and session_state.market_data_ok
             effective_session_entry_allowed = effective_session_entry_allowed and session_state.entry_allowed
+            effective_session_exit_allowed = effective_session_exit_allowed and session_state.entry_allowed
             if not session_state.market_data_ok:
                 reason_codes.append("SESSION_MARKET_DATA_UNAVAILABLE")
             if session_state.degraded:
                 reason_codes.extend(session_state.reason_codes)
-        if not effective_session_entry_allowed:
+        if execution_side == OrderSide.BUY and not effective_session_entry_allowed:
             reason_codes.append("SESSION_ENTRY_BLOCKED")
+        if execution_side == OrderSide.SELL and not effective_session_exit_allowed:
+            reason_codes.append("SESSION_EXIT_BLOCKED")
         reason_codes = list(dict.fromkeys(code for code in reason_codes if code))
         return ExecutionReadiness(
             account_id=account_id,
             strategy_id=strategy_id,
             instrument_id=instrument_id,
+            execution_side=execution_side,
             market_data_ok=effective_market_data_ok,
-            account_entry_enabled=account.entry_enabled if account is not None else True,
+            account_entry_enabled=effective_account_entry_enabled,
+            account_exit_enabled=effective_account_exit_enabled,
             kill_switch_active=kill_switch_active,
             reconciliation_break_active=open_break,
             risk_flag_active=bool(risk_flag.hard_block) if risk_flag is not None else False,
@@ -639,6 +881,7 @@ class InMemoryOpsStore:
             confidence_ok=confidence_ok and (strategy.enabled if strategy is not None else True),
             vendor_healthy=vendor_healthy,
             session_entry_allowed=effective_session_entry_allowed,
+            session_exit_allowed=effective_session_exit_allowed,
             max_allowed_notional_krw=max_allowed_notional_krw,
             reason_codes=reason_codes,
         )

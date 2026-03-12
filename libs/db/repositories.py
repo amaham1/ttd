@@ -14,6 +14,7 @@ from libs.db.models import (
     CoreOrderTicket,
     CoreReconciliationBreak,
     CoreRiskGateDecision,
+    RefInstrumentProfile,
     CoreTradeCandidate,
     CoreTradeIntent,
     EvtExecutionFill,
@@ -25,6 +26,45 @@ from libs.db.models import (
 @dataclass(slots=True)
 class PersistenceResult:
     primary_key: int
+
+
+@dataclass(slots=True)
+class InstrumentProfileSnapshot:
+    instrument_id: str
+    issuer_name: str | None
+    sector_name: str | None
+    oil_up_beta: float
+    usdkrw_up_beta: float
+    rates_up_beta: float
+    china_growth_beta: float
+    domestic_demand_beta: float
+    export_beta: float
+    thematic_tags: list[str]
+    rationale: str | None
+    confidence_score: float | None
+    used_fallback: bool
+    source_event_family: str | None
+    source_event_type: str | None
+    source_report_name: str | None
+    source_receipt_no: str | None
+    source_summary_text: str | None
+    created_at_utc: datetime | None
+    updated_at_utc: datetime | None
+
+    def market_profile_payload(self) -> dict:
+        return {
+            "sector_name": self.sector_name,
+            "oil_up_beta": self.oil_up_beta,
+            "usdkrw_up_beta": self.usdkrw_up_beta,
+            "rates_up_beta": self.rates_up_beta,
+            "china_growth_beta": self.china_growth_beta,
+            "domestic_demand_beta": self.domestic_demand_beta,
+            "export_beta": self.export_beta,
+            "thematic_tags": list(self.thematic_tags),
+            "rationale": self.rationale or "",
+            "confidence": self.confidence_score if self.confidence_score is not None else 0.0,
+            "used_fallback": self.used_fallback,
+        }
 
 
 class TradingRepository:
@@ -194,6 +234,103 @@ class TradingRepository:
             session.commit()
             session.refresh(row)
             return PersistenceResult(primary_key=row.trade_candidate_pk)
+
+    def upsert_instrument_profile(
+        self,
+        *,
+        instrument_id: str,
+        issuer_name: str | None,
+        sector_name: str | None,
+        oil_up_beta: float,
+        usdkrw_up_beta: float,
+        rates_up_beta: float,
+        china_growth_beta: float,
+        domestic_demand_beta: float,
+        export_beta: float,
+        thematic_tags: list[str] | None,
+        rationale: str | None,
+        confidence_score: float | None,
+        used_fallback: bool,
+        source_event_family: str | None = None,
+        source_event_type: str | None = None,
+        source_report_name: str | None = None,
+        source_receipt_no: str | None = None,
+        source_summary_text: str | None = None,
+    ) -> PersistenceResult:
+        normalized_instrument_id = str(instrument_id or "").strip()
+        if not normalized_instrument_id:
+            raise ValueError("instrument_id is required")
+        normalized_tags = [str(tag).strip() for tag in (thematic_tags or []) if str(tag).strip()]
+        with self.session_factory() as session:
+            row = session.query(RefInstrumentProfile).filter_by(instrument_id=normalized_instrument_id).one_or_none()
+            now = datetime.now(UTC).replace(tzinfo=None)
+            payload = {
+                "instrument_id": normalized_instrument_id,
+                "issuer_name": (str(issuer_name).strip() if issuer_name else None),
+                "sector_name": (str(sector_name).strip() if sector_name else None),
+                "oil_up_beta": oil_up_beta,
+                "usdkrw_up_beta": usdkrw_up_beta,
+                "rates_up_beta": rates_up_beta,
+                "china_growth_beta": china_growth_beta,
+                "domestic_demand_beta": domestic_demand_beta,
+                "export_beta": export_beta,
+                "thematic_tags": normalized_tags,
+                "rationale": (str(rationale).strip() if rationale else None),
+                "confidence_score": confidence_score,
+                "used_fallback": bool(used_fallback),
+                "source_event_family": (str(source_event_family).strip() if source_event_family else None),
+                "source_event_type": (str(source_event_type).strip() if source_event_type else None),
+                "source_report_name": (str(source_report_name).strip() if source_report_name else None),
+                "source_receipt_no": (str(source_receipt_no).strip() if source_receipt_no else None),
+                "source_summary_text": (str(source_summary_text).strip() if source_summary_text else None),
+            }
+            if row is None:
+                row = RefInstrumentProfile(
+                    **payload,
+                    created_at_utc=now,
+                    updated_at_utc=now,
+                )
+                session.add(row)
+            else:
+                for key, value in payload.items():
+                    setattr(row, key, value)
+                row.updated_at_utc = now
+            session.commit()
+            session.refresh(row)
+            return PersistenceResult(primary_key=row.instrument_profile_pk)
+
+    def get_instrument_profile(self, instrument_id: str) -> InstrumentProfileSnapshot | None:
+        normalized_instrument_id = str(instrument_id or "").strip()
+        if not normalized_instrument_id:
+            return None
+        with self.session_factory() as session:
+            row = session.query(RefInstrumentProfile).filter_by(instrument_id=normalized_instrument_id).one_or_none()
+            if row is None:
+                return None
+            return self._instrument_profile_row_to_snapshot(row)
+
+    def list_instrument_profiles(
+        self,
+        *,
+        limit: int = 100,
+        stale_before_utc: datetime | None = None,
+    ) -> list[InstrumentProfileSnapshot]:
+        with self.session_factory() as session:
+            query = session.query(RefInstrumentProfile)
+            if stale_before_utc is not None:
+                query = query.filter(RefInstrumentProfile.updated_at_utc <= stale_before_utc)
+                query = query.order_by(RefInstrumentProfile.updated_at_utc.asc())
+            else:
+                query = query.order_by(RefInstrumentProfile.updated_at_utc.desc())
+            rows = query.limit(limit).all()
+            return [self._instrument_profile_row_to_snapshot(row) for row in rows]
+
+    def count_instrument_profiles(self, *, stale_before_utc: datetime | None = None) -> int:
+        with self.session_factory() as session:
+            query = session.query(RefInstrumentProfile)
+            if stale_before_utc is not None:
+                query = query.filter(RefInstrumentProfile.updated_at_utc <= stale_before_utc)
+            return int(query.count())
 
     def store_candidate_decision(self, decision: CandidateDecisionRecord) -> PersistenceResult:
         with self.session_factory() as session:
@@ -588,3 +725,28 @@ class TradingRepository:
             "actual_payload": row.actual_payload or {},
             "notes": row.notes,
         }
+
+    @staticmethod
+    def _instrument_profile_row_to_snapshot(row: RefInstrumentProfile) -> InstrumentProfileSnapshot:
+        return InstrumentProfileSnapshot(
+            instrument_id=row.instrument_id,
+            issuer_name=row.issuer_name,
+            sector_name=row.sector_name,
+            oil_up_beta=float(row.oil_up_beta or 0.0),
+            usdkrw_up_beta=float(row.usdkrw_up_beta or 0.0),
+            rates_up_beta=float(row.rates_up_beta or 0.0),
+            china_growth_beta=float(row.china_growth_beta or 0.0),
+            domestic_demand_beta=float(row.domestic_demand_beta or 0.0),
+            export_beta=float(row.export_beta or 0.0),
+            thematic_tags=list(row.thematic_tags or []),
+            rationale=row.rationale,
+            confidence_score=float(row.confidence_score) if row.confidence_score is not None else None,
+            used_fallback=bool(row.used_fallback),
+            source_event_family=row.source_event_family,
+            source_event_type=row.source_event_type,
+            source_report_name=row.source_report_name,
+            source_receipt_no=row.source_receipt_no,
+            source_summary_text=row.source_summary_text,
+            created_at_utc=row.created_at_utc,
+            updated_at_utc=row.updated_at_utc,
+        )

@@ -156,6 +156,64 @@ class MacroSeriesPointRecord(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class InvestorFlowRecord(BaseModel):
+    instrument_id: str
+    venue: str
+    trade_date: date
+    foreign_net_buy_krw: float | None = None
+    institution_net_buy_krw: float | None = None
+    retail_net_buy_krw: float | None = None
+    other_corp_net_buy_krw: float | None = None
+    foreign_net_buy_shares: float | None = None
+    institution_net_buy_shares: float | None = None
+    retail_net_buy_shares: float | None = None
+    other_corp_net_buy_shares: float | None = None
+    source: str = "PYKRX"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class InstrumentFundamentalsRecord(BaseModel):
+    instrument_id: str
+    venue: str
+    trade_date: date
+    bps: float | None = None
+    per: float | None = None
+    pbr: float | None = None
+    eps: float | None = None
+    div_yield_pct: float | None = None
+    dps: float | None = None
+    source: str = "PYKRX"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ShortInterestRecord(BaseModel):
+    instrument_id: str
+    venue: str
+    trade_date: date
+    short_volume_shares: float | None = None
+    short_volume_ratio_pct: float | None = None
+    short_balance_shares: float | None = None
+    short_balance_ratio_pct: float | None = None
+    borrow_balance_shares: float | None = None
+    borrow_balance_ratio_pct: float | None = None
+    source: str = "MANUAL"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SectorFlowRecord(BaseModel):
+    trade_date: date
+    sector_name: str
+    net_flow_krw: float | None = None
+    foreign_net_flow_krw: float | None = None
+    institution_net_flow_krw: float | None = None
+    retail_net_flow_krw: float | None = None
+    sector_return_pct: float | None = None
+    relative_strength_pct: float | None = None
+    futures_basis_bps: float | None = None
+    source: str = "MANUAL"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class DisclosureEvent(BaseModel):
     disclosure_id: str
     instrument_id: str
@@ -223,6 +281,7 @@ class WatchlistTrigger(BaseModel):
     trigger_type: str
     reason_code: str
     priority: int
+    created_at_utc: datetime = Field(default_factory=lambda: datetime.now(UTC))
     expires_at_utc: datetime
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -326,6 +385,17 @@ class TradeCandidate(BaseModel):
     crowding_penalty_bps: float | None = None
     cooldown_key: str | None = None
     decision_id: str | None = None
+    candidate_family: str | None = None
+    exit_reason_code: str | None = None
+    target_qty_override: int | None = None
+    position_qty: int | None = None
+    position_avg_cost_krw: float | None = None
+    position_return_pct: float | None = None
+    holding_days: int | None = None
+    thematic_tags: list[str] = Field(default_factory=list)
+    cross_asset_impact_score: float | None = None
+    thematic_alignment_score: float | None = None
+    macro_headwind_score: float | None = None
 
 
 class DisclosureRuleDefinition(BaseModel):
@@ -476,8 +546,10 @@ class ExecutionReadiness(BaseModel):
     account_id: str
     strategy_id: str
     instrument_id: str
+    execution_side: OrderSide = OrderSide.BUY
     market_data_ok: bool = True
     account_entry_enabled: bool = True
+    account_exit_enabled: bool = True
     kill_switch_active: bool = False
     reconciliation_break_active: bool = False
     risk_flag_active: bool = False
@@ -486,6 +558,7 @@ class ExecutionReadiness(BaseModel):
     confidence_ok: bool = True
     vendor_healthy: bool = True
     session_entry_allowed: bool = True
+    session_exit_allowed: bool = True
     max_allowed_notional_krw: int | None = None
     reason_codes: list[str] = Field(default_factory=list)
     as_of_utc: datetime = Field(default_factory=lambda: datetime.now(UTC))

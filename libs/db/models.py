@@ -25,6 +25,32 @@ class RefInstrument(Base):
     created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=False), default=utcnow)
 
 
+class RefInstrumentProfile(Base):
+    __tablename__ = "ref_instrument_profile"
+
+    instrument_profile_pk: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    instrument_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    issuer_name: Mapped[str | None] = mapped_column(String(255))
+    sector_name: Mapped[str | None] = mapped_column(String(128))
+    oil_up_beta: Mapped[float] = mapped_column(Numeric(8, 4), default=0)
+    usdkrw_up_beta: Mapped[float] = mapped_column(Numeric(8, 4), default=0)
+    rates_up_beta: Mapped[float] = mapped_column(Numeric(8, 4), default=0)
+    china_growth_beta: Mapped[float] = mapped_column(Numeric(8, 4), default=0)
+    domestic_demand_beta: Mapped[float] = mapped_column(Numeric(8, 4), default=0)
+    export_beta: Mapped[float] = mapped_column(Numeric(8, 4), default=0)
+    thematic_tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    rationale: Mapped[str | None] = mapped_column(Text)
+    confidence_score: Mapped[float | None] = mapped_column(Numeric(8, 4))
+    used_fallback: Mapped[bool] = mapped_column(Boolean, default=False)
+    source_event_family: Mapped[str | None] = mapped_column(String(64), index=True)
+    source_event_type: Mapped[str | None] = mapped_column(String(64))
+    source_report_name: Mapped[str | None] = mapped_column(String(255))
+    source_receipt_no: Mapped[str | None] = mapped_column(String(64), index=True)
+    source_summary_text: Mapped[str | None] = mapped_column(Text)
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=False), default=utcnow)
+    updated_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=False), default=utcnow)
+
+
 class RefBrokerStatusMap(Base):
     __tablename__ = "ref_broker_status_map"
 

@@ -8,6 +8,8 @@ const marketIntelTarget = process.env.MARKET_INTEL_PROXY_TARGET ?? "http://local
 const replayRunnerTarget = process.env.REPLAY_RUNNER_PROXY_TARGET ?? "http://localhost:8004";
 const shadowLiveTarget = process.env.SHADOW_LIVE_PROXY_TARGET ?? "http://localhost:8005";
 const dataIngestTarget = process.env.DATA_INGEST_PROXY_TARGET ?? "http://localhost:8006";
+const selectorEngineTarget = process.env.SELECTOR_ENGINE_PROXY_TARGET ?? "http://localhost:8008";
+const portfolioEngineTarget = process.env.PORTFOLIO_ENGINE_PROXY_TARGET ?? "http://localhost:8009";
 
 export default defineConfig({
   plugins: [vue()],
@@ -40,6 +42,14 @@ export default defineConfig({
       "/svc/data": {
         target: dataIngestTarget,
         rewrite: (path) => path.replace(/^\/svc\/data/, ""),
+      },
+      "/svc/selector": {
+        target: selectorEngineTarget,
+        rewrite: (path) => path.replace(/^\/svc\/selector/, ""),
+      },
+      "/svc/portfolio": {
+        target: portfolioEngineTarget,
+        rewrite: (path) => path.replace(/^\/svc\/portfolio/, ""),
       },
     },
   },

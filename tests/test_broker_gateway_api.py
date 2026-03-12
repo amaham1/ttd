@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
+import pytest
 
 from apps.broker_gateway.main import app
 from apps.broker_gateway.main import runtime
@@ -177,6 +178,85 @@ def test_reconciliation_run_opens_break_when_broker_order_is_missing() -> None:
         breaks_response = client.get("/reconciliation/breaks")
         assert breaks_response.status_code == 200
         assert breaks_response.json()[0]["scope_id"] == "order-recon-1"
+    finally:
+        monkeypatch.undo()
+
+
+def test_resolve_reconciliation_break_endpoint_marks_break_resolved() -> None:
+    monkeypatch = MonkeyPatch()
+    monkeypatch.setattr(runtime.repository, "upsert_reconciliation_break", lambda **kwargs: None)
+    monkeypatch.setattr(runtime.repository, "resolve_reconciliation_breaks", lambda scope_type, scope_id: 1)
+    monkeypatch.setattr(runtime.repository, "list_reconciliation_breaks", lambda limit=100, status_code=None: [])
+
+    break_entry = runtime._upsert_reconciliation_break(
+        scope_type="BROKER_NOTICE",
+        scope_id="16153800",
+        severity_code="HIGH",
+        expected_payload={},
+        actual_payload={"ODER_NO": "0016153800", "STCK_SHRN_ISCD": "005935"},
+        notes="synthetic broker notice break",
+    )
+
+    try:
+        response = client.post(f"/reconciliation/breaks/{break_entry['break_id']}/resolve")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["break_id"] == break_entry["break_id"]
+        assert body["status_code"] == "RESOLVED"
+        assert body["resolved_at_utc"] is not None
+
+        open_breaks_response = client.get("/reconciliation/breaks", params={"open_only": "true"})
+        assert open_breaks_response.status_code == 200
+        assert all(item["break_id"] != break_entry["break_id"] for item in open_breaks_response.json())
+    finally:
+        monkeypatch.undo()
+
+
+def test_live_order_validation_allows_preferred_but_rejects_excluded_symbol() -> None:
+    monkeypatch = MonkeyPatch()
+    settings = broker_service_module.get_settings()
+
+    async def fake_query_balance(_payload):
+        return {"output1": [], "output2": [{"tot_evlu_amt": "6400000", "bfdy_tot_asst_evlu_amt": "6500000"}]}
+
+    async def fake_is_common_or_preferred_stock(symbol: str) -> bool:
+        return symbol in {"005939", "005935"}
+
+    monkeypatch.setattr(settings, "kis_live_trading_enabled", True)
+    monkeypatch.setattr(settings, "kis_live_require_arm", False)
+    monkeypatch.setattr(settings, "kis_live_common_stock_only", True)
+    monkeypatch.setattr(settings, "kis_live_excluded_symbols", "005935")
+    monkeypatch.setattr(runtime.adapter, "query_balance", fake_query_balance)
+    monkeypatch.setattr(
+        runtime.common_stock_universe,
+        "is_common_or_preferred_stock",
+        fake_is_common_or_preferred_stock,
+    )
+    try:
+        asyncio.run(
+            runtime._ensure_live_order_allowed(
+                {
+                    "pdno": "005939",
+                    "ord_qty": 1,
+                    "ord_unpr": 100000,
+                }
+            )
+        )
+
+        with pytest.raises(
+            broker_service_module.LiveTradingGuardError,
+            match="excluded by KIS_LIVE_EXCLUDED_SYMBOLS",
+        ):
+            asyncio.run(
+                runtime._ensure_live_order_allowed(
+                    {
+                        "pdno": "005935",
+                        "ord_qty": 1,
+                        "ord_unpr": 100000,
+                    }
+                )
+            )
     finally:
         monkeypatch.undo()
 

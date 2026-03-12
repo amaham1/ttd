@@ -93,3 +93,65 @@ def test_trading_core_allows_one_share_when_price_is_within_tolerance() -> None:
     )
 
     assert command.qty == 1
+
+
+def test_trading_core_blocks_sell_candidate_when_exit_permission_is_disabled() -> None:
+    candidate = market_intel_service.sample_candidates()[0].model_copy(
+        update={
+            "candidate_id": "candidate-exit-blocked",
+            "side": OrderSide.SELL,
+            "target_qty_override": 3,
+            "target_notional_krw": 150000,
+            "candidate_family": "EXIT",
+            "exit_reason_code": "EXIT_STOP_LOSS",
+        }
+    )
+    readiness = ExecutionReadiness(
+        account_id="default",
+        strategy_id=candidate.strategy_id,
+        instrument_id=candidate.instrument_id,
+        execution_side=OrderSide.SELL,
+        account_entry_enabled=True,
+        account_exit_enabled=False,
+    )
+
+    decision = trading_core_service.evaluate_candidate(candidate, execution_readiness=readiness)
+
+    assert decision.hard_block is True
+    assert "ACCOUNT_EXIT_DISABLED" in decision.reason_codes
+
+
+def test_trading_core_uses_sell_target_qty_override_for_exit_orders() -> None:
+    candidate = market_intel_service.sample_candidates()[0].model_copy(
+        update={
+            "candidate_id": "candidate-exit-qty",
+            "side": OrderSide.SELL,
+            "target_qty_override": 7,
+            "target_notional_krw": 490000,
+            "candidate_family": "EXIT",
+            "exit_reason_code": "EXIT_TIME_STOP",
+        }
+    )
+    readiness = ExecutionReadiness(
+        account_id="default",
+        strategy_id=candidate.strategy_id,
+        instrument_id=candidate.instrument_id,
+        execution_side=OrderSide.SELL,
+        account_exit_enabled=True,
+    )
+
+    decision = trading_core_service.evaluate_candidate(candidate, execution_readiness=readiness)
+    intent = trading_core_service.build_trade_intent(candidate, decision)
+
+    assert intent is not None
+    command = trading_core_service.build_order_submit_command(
+        intent=intent,
+        strategy_id="close-only-defense",
+        price_krw=70000,
+        venue_hint="KRX",
+        max_order_value_krw=5000,
+        enforce_hard_value_cap=True,
+    )
+
+    assert command.side == OrderSide.SELL
+    assert command.qty == 7
